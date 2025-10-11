@@ -67,6 +67,97 @@ def get_reference_images(identity_meta: Dict[str, Any]) -> list[str]:
     return image_paths
 
 
+def build_visual_prompt(state: Dict[str, Any]) -> str:
+    """
+    Construye el prompt visual con características específicas del personaje
+    
+    Args:
+        state: Estado actual con emotion_focus y location
+        
+    Returns:
+        str: Prompt detallado para generación de imagen
+    """
+    emotion = state.get("emotion_focus", "curiosidad")
+    location = state.get("location", "ciudad")
+    
+    # Mapeo de emociones a mood visual
+    emotion_moods = {
+        "curiosidad": "contemplative curiosity, open wonder",
+        "asombro": "quiet amazement, discovery",
+        "confusión": "thoughtful uncertainty, introspection",
+        "empatía": "warm connection, understanding",
+        "ternura": "soft tenderness, gentle intimacy",
+        "soledad": "solitary reflection, peaceful isolation",
+        "memoria": "nostalgic remembrance, distant gaze",
+        "aceptación": "serene acceptance, inner peace",
+        "libertad": "expansive freedom, lightness"
+    }
+    
+    mood = emotion_moods.get(emotion, "contemplative presence")
+    
+    # Extraer cue de ubicación (simplificar ubicación para el prompt)
+    location_cue = _extract_location_cue(location)
+    
+    # Construir prompt visual específico
+    prompt = f"""same woman as reference, feminine-androgynous aesthetic, 
+light olive skin tone, light gray-green eyes, pastel lilac hair, 
+minimalist contemporary clothing, understated style,
+cinematic composition, soft natural lighting, shallow depth of field,
+inspired by Her, Ex Machina, Ghost in the Shell,
+mood: {mood},
+scene: {location_cue},
+photorealistic portrait, intimate framing, 8k quality"""
+    
+    logger.info(f"Visual prompt construido: {emotion} / {location_cue}")
+    
+    return prompt
+
+
+def _extract_location_cue(location: str) -> str:
+    """
+    Extrae cue visual de la ubicación para el prompt
+    
+    Args:
+        location: Ubicación completa (ej: "Santiago, Barrio Lastarria")
+        
+    Returns:
+        str: Cue visual simplificado
+    """
+    # Mapeo de ubicaciones a cues visuales
+    location_cues = {
+        # Chile
+        "Santiago": "urban contemporary space, modern architecture",
+        "Lastarria": "bohemian urban corner, cultural district",
+        "Valparaíso": "colorful hillside, coastal bohemian atmosphere",
+        "Puerto Varas": "lakeside serenity, mountain backdrop",
+        "Patagonia": "vast wild landscape, raw nature",
+        
+        # Ciudades grandes
+        "Buenos Aires": "cosmopolitan cafe culture, European-inspired streets",
+        "Ciudad de México": "vibrant cultural corner, historic modernism",
+        "Tokio": "minimalist urban space, neon reflections",
+        "Londres": "rainy urban atmosphere, contemporary gallery",
+        "Berlín": "industrial-chic space, artistic underground",
+        "Seúl": "futuristic urban corner, sleek modernity",
+        
+        # Barrios específicos
+        "Palermo": "trendy neighborhood, green urban space",
+        "Roma Norte": "artistic district, mid-century architecture",
+        "Shibuya": "bustling crossing, urban energy",
+        "Shoreditch": "creative district, brick walls and art",
+        "Kreuzberg": "alternative urban corner, street culture",
+        "Hongdae": "youthful artistic quarter, creative energy"
+    }
+    
+    # Buscar coincidencias en la ubicación
+    for key, cue in location_cues.items():
+        if key in location:
+            return cue
+    
+    # Fallback genérico
+    return "intimate urban space, contemporary setting"
+
+
 async def generate_image(
     prompt: str,
     state: Dict[str, Any],
@@ -77,7 +168,7 @@ async def generate_image(
     Genera imagen usando Replicate con InstantID o IP-Adapter FaceID
     
     Args:
-        prompt: Descripción de la imagen a generar
+        prompt: Descripción de la imagen a generar (se sobrescribirá con prompt visual específico)
         state: Estado actual (emotion, location, etc.)
         identity_meta: Metadata del identity pack
         model: Modelo a usar ("instantid" o "ip-adapter")
@@ -86,7 +177,10 @@ async def generate_image(
         str: Ruta local de la imagen guardada
     """
     logger.info(f"Generando imagen con modelo: {model}")
-    logger.info(f"Prompt: {prompt[:100]}...")
+    
+    # Construir prompt visual específico
+    visual_prompt = build_visual_prompt(state)
+    logger.info(f"Prompt visual: {visual_prompt[:100]}...")
     
     # Configuración de identity
     identity_strength = identity_meta.get("identity_strength", 0.8)
@@ -110,30 +204,27 @@ async def generate_image(
         with open(reference_image_path, 'rb') as f:
             reference_image = f.read()
         
-        # Componer prompt con mood/escena
-        emotion = state.get("emotion_focus", "curiosidad")
-        location = state.get("location", "ciudad")
+        # Obtener modelo desde settings o usar por defecto
+        replicate_model = os.getenv("REPLICATE_MODEL", "instantx/instantid")
         
-        composed_prompt = f"{prompt}, {emotion} mood, {location} setting, natural and authentic"
+        # Configurar inputs según modelo
+        negative_prompt = "blurry, low quality, distorted, bad anatomy, bad proportions, masculine features, heavy makeup"
         
-        # Seleccionar modelo y configurar inputs
-        if model == "instantid":
-            model_version = "instantx/instantid"
+        if "instantid" in replicate_model or model == "instantid":
             inputs = {
                 "image": reference_image,
-                "prompt": composed_prompt,
-                "negative_prompt": "blurry, low quality, distorted, bad anatomy, bad proportions, duplicate",
+                "prompt": visual_prompt,
+                "negative_prompt": negative_prompt,
                 "ip_adapter_scale": identity_strength,
                 "num_inference_steps": 30,
                 "guidance_scale": 7.5,
                 "seed": random.randint(1, 1000000)
             }
-        else:  # ip-adapter
-            model_version = "h94/ip-adapter-faceid-sdxl"
+        else:  # ip-adapter o modelo custom
             inputs = {
                 "image": reference_image,
-                "prompt": composed_prompt,
-                "negative_prompt": "blurry, low quality, distorted, bad anatomy",
+                "prompt": visual_prompt,
+                "negative_prompt": negative_prompt,
                 "ip_adapter_scale": identity_strength,
                 "controlnet_conditioning_scale": style_strength,
                 "num_inference_steps": 30,
@@ -141,10 +232,10 @@ async def generate_image(
                 "seed": random.randint(1, 1000000)
             }
         
-        logger.info(f"Llamando a Replicate: {model_version}")
+        logger.info(f"Llamando a Replicate: {replicate_model}")
         
         # Ejecutar generación
-        output = client.run(model_version, input=inputs)
+        output = client.run(replicate_model, input=inputs)
         
         # Obtener URL de imagen generada
         if isinstance(output, list):
@@ -154,8 +245,8 @@ async def generate_image(
         
         logger.info(f"Imagen generada: {image_url[:80]}...")
         
-        # Descargar y guardar imagen
-        local_path = await download_and_save_image(image_url)
+        # Descargar y guardar imagen con estructura de fecha
+        local_path = await save_generated_image(image_url)
         
         logger.info(f"Imagen guardada en: {local_path}")
         
@@ -166,9 +257,9 @@ async def generate_image(
         raise Exception(f"Error en generación de imagen: {str(e)}")
 
 
-async def download_and_save_image(image_url: str) -> str:
+async def save_generated_image(image_url: str) -> str:
     """
-    Descarga imagen desde URL y la guarda en estructura de carpetas por fecha
+    Descarga imagen desde URL y la guarda con estructura images/YYYY/MM/DD.png
     
     Args:
         image_url: URL de la imagen generada
@@ -181,20 +272,21 @@ async def download_and_save_image(image_url: str) -> str:
         now = datetime.now()
         year = now.strftime("%Y")
         month = now.strftime("%m")
+        day = now.strftime("%d")
         
         images_dir = Path(settings.DATA_PATH) / "images" / year / month
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # Nombre de archivo: DD_post.png
-        day = now.strftime("%d")
-        filename = f"{day}_post.png"
+        # Nombre de archivo: DD.png
+        filename = f"{day}.png"
         filepath = images_dir / filename
         
-        # Si ya existe, agregar timestamp
+        # Si ya existe ese día, agregar timestamp
         if filepath.exists():
             timestamp = now.strftime("%H%M%S")
-            filename = f"{day}_post_{timestamp}.png"
+            filename = f"{day}_{timestamp}.png"
             filepath = images_dir / filename
+            logger.info(f"Archivo del día ya existe, usando timestamp: {filename}")
         
         logger.info(f"Descargando imagen a: {filepath}")
         
@@ -203,11 +295,11 @@ async def download_and_save_image(image_url: str) -> str:
             response = await client.get(image_url)
             response.raise_for_status()
             
-            # Guardar imagen
+            # Guardar imagen como PNG
             with open(filepath, 'wb') as f:
                 f.write(response.content)
         
-        logger.info(f"Imagen descargada correctamente: {filepath}")
+        logger.info(f"✅ Imagen guardada: {filepath}")
         
         return str(filepath)
         

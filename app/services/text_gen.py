@@ -3,6 +3,7 @@ Servicio para generación de texto con OpenAI
 """
 from openai import OpenAI
 from typing import Dict, Any
+from datetime import datetime
 from app.core.config import settings
 from app.core.logging_config import get_logger
 
@@ -11,55 +12,71 @@ logger = get_logger(__name__)
 
 def generate_caption(state: Dict[str, Any], identity_meta: Dict[str, Any]) -> str:
     """
-    Genera un caption breve y poético para el post
+    Genera un caption poético e íntimo para el post
+    
+    Construye prompt con: identidad, capítulo, emoción, tema del día, referencias estéticas
+    Produce 50-90 palabras máx, en español, sin hashtags, tono poético íntimo
     
     Args:
         state: Estado actual con chapter, emotion_focus, learning_goal, location
         identity_meta: Metadata del identity pack (nombre, estilo, paleta, etc.)
         
     Returns:
-        str: Caption en español, 50-90 palabras, coherente con emoción y paleta
+        str: Caption en español, 50-90 palabras, sin hashtags, poético e íntimo
     """
     logger.info(f"Generando caption para: {state.get('chapter')} / {state.get('emotion_focus')}")
     
     # Extraer información del estado
-    chapter = state.get("chapter", "inicio")
+    chapter = state.get("chapter", "despertar")
     emotion = state.get("emotion_focus", "curiosidad")
     goal = state.get("learning_goal", "explorar el mundo")
     location = state.get("location", "ciudad")
     
     # Extraer información del identity metadata
-    influencer_name = identity_meta.get("influencer_name", "Nuestro personaje")
-    style_notes = identity_meta.get("style_notes", "fotografía natural y auténtica")
-    themes = identity_meta.get("themes", ["lifestyle", "crecimiento personal"])
-    description = identity_meta.get("description", "Influencer en un viaje de autodescubrimiento")
+    influencer_name = identity_meta.get("influencer_name", "Narradora")
+    description = identity_meta.get("description", "Un viaje de autodescubrimiento")
+    style_notes = identity_meta.get("style_notes", "fotografía natural y contemplativa")
+    palette = identity_meta.get("palette", {})
+    palette_desc = palette.get("mood", "sereno") if isinstance(palette, dict) else "sereno"
+    voice_tone = identity_meta.get("voice_tone", "poético e íntimo")
+    
+    # Obtener tema del día (basado en día del año)
+    daily_theme = _get_daily_theme()
     
     # Construir el prompt
-    prompt = f"""Escribe un caption poético y breve para una publicación de Instagram.
+    prompt = f"""Escribe un caption poético e íntimo para una publicación de Instagram.
 
-Contexto del personaje:
-- Nombre/Identidad: {influencer_name}
-- Descripción: {description}
-- Estilo visual: {style_notes}
-- Temas: {", ".join(themes) if isinstance(themes, list) else themes}
+IDENTIDAD:
+- Voz narrativa: {influencer_name}
+- Esencia: {description}
+- Tono de voz: {voice_tone}
 
-Momento narrativo actual:
-- Capítulo: {chapter}
+MOMENTO NARRATIVO:
+- Capítulo actual: {chapter}
 - Emoción predominante: {emotion}
-- Objetivo de aprendizaje: {goal}
-- Ubicación/Escenario: {location}
+- Ubicación: {location}
+- Propósito interior: {goal}
 
-Requisitos del caption:
-- Extensión: 50-90 palabras exactamente
+TEMA DEL DÍA: {daily_theme}
+
+REFERENCIAS ESTÉTICAS:
+- Estilo visual: {style_notes}
+- Paleta emocional: {palette_desc}
+
+INSTRUCCIONES ESPECÍFICAS:
+- Longitud: exactamente entre 50 y 90 palabras
 - Idioma: español
-- Tono: poético, introspectivo, auténtico
-- Debe reflejar la emoción "{emotion}" de manera sutil
-- Debe conectar con el objetivo: "{goal}"
-- Coherente con el momento "{chapter}" de la historia
-- Incluir 2-3 hashtags relevantes al final
+- Tono: poético, íntimo, reflexivo
+- Perspectiva: primera persona
+- NO incluir hashtags
+- NO usar emojis
+- Evocar la emoción "{emotion}" de manera sutil y lírica
+- Conectar orgánicamente con el tema "{daily_theme}"
+- Sentir como un fragmento de diario personal
+- Dejar espacio para la interpretación del lector
 
-El caption debe sentirse natural, como si el personaje estuviera compartiendo un momento genuino de su día.
-No uses emojis excesivos. Sé auténtico y conmovedor."""
+El caption debe ser como un susurro compartido, una reflexión privada hecha pública.
+Usa imágenes sensoriales y metáforas sutiles."""
 
     try:
         # Inicializar cliente OpenAI
@@ -71,35 +88,82 @@ No uses emojis excesivos. Sé auténtico y conmovedor."""
             messages=[
                 {
                     "role": "system",
-                    "content": "Eres un escritor creativo especializado en narrativa visual y storytelling para redes sociales. Escribes captions poéticos, auténticos y emotivos que conectan profundamente con la audiencia."
+                    "content": "Eres una escritora lírica que crea micro-narrativas íntimas. Tu estilo es poético pero accesible, profundo pero no pretencioso. Escribes como si compartieras un secreto con un amigo cercano."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            temperature=0.8,
-            max_tokens=250,
-            presence_penalty=0.6,
-            frequency_penalty=0.3
+            temperature=0.85,
+            max_tokens=200,
+            presence_penalty=0.5,
+            frequency_penalty=0.4
         )
         
         caption = response.choices[0].message.content.strip()
         
-        # Validar longitud aproximada
+        # Validar longitud
         word_count = len(caption.split())
         logger.info(f"Caption generado: {word_count} palabras")
         
-        if word_count < 40:
-            logger.warning(f"Caption muy corto ({word_count} palabras), considerado válido pero bajo el rango ideal")
-        elif word_count > 120:
-            logger.warning(f"Caption largo ({word_count} palabras), considerado válido pero sobre el rango ideal")
+        if word_count < 45:
+            logger.warning(f"Caption corto ({word_count} palabras), bajo rango ideal")
+        elif word_count > 95:
+            logger.warning(f"Caption largo ({word_count} palabras), sobre rango ideal")
         
         return caption
         
     except Exception as e:
         logger.error(f"Error al generar caption con OpenAI: {str(e)}")
         raise Exception(f"Error al generar caption: {str(e)}")
+
+
+def _get_daily_theme() -> str:
+    """
+    Obtiene el tema del día basado en ciclo mensual
+    
+    Returns:
+        str: Tema sugerido para el día
+    """
+    themes = [
+        "luz y sombra",
+        "memorias que regresan",
+        "gestos cotidianos",
+        "espacios intermedios",
+        "conversaciones silenciosas",
+        "rituales personales",
+        "fragmentos de belleza",
+        "tiempo suspendido",
+        "presencias ausentes",
+        "caminos que se bifurcan",
+        "ecos interiores",
+        "ventanas y umbrales",
+        "lo que permanece",
+        "transformaciones sutiles",
+        "encuentros fortuitos",
+        "soledad habitada",
+        "pequeñas revelaciones",
+        "ciclos y regresos",
+        "huellas invisibles",
+        "instantes robados",
+        "la textura del silencio",
+        "geografías internas",
+        "lo no dicho",
+        "destellos de conexión",
+        "respirar el presente",
+        "mapas imaginarios",
+        "reflejos y superficies",
+        "el peso de las cosas",
+        "lugares de paso",
+        "la música del mundo"
+    ]
+    
+    # Usar día del mes para consistencia
+    day_of_month = datetime.now().day
+    theme_index = (day_of_month - 1) % len(themes)
+    
+    return themes[theme_index]
 
 
 def generate_image_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) -> str:
@@ -117,42 +181,42 @@ def generate_image_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) 
     
     emotion = state.get("emotion_focus", "curiosidad")
     location = state.get("location", "ciudad")
-    chapter = state.get("chapter", "inicio")
+    chapter = state.get("chapter", "despertar")
     
     style_notes = identity_meta.get("style_notes", "fotografía natural")
+    palette = identity_meta.get("palette", {})
+    
+    # Extraer colores de paleta si existen
+    if isinstance(palette, dict):
+        palette_colors = palette.get("primary", ["tonos cálidos"])
+        if isinstance(palette_colors, list):
+            color_desc = ", ".join(palette_colors)
+        else:
+            color_desc = str(palette_colors)
+    else:
+        color_desc = "tonos naturales"
     
     # Mapeo de emociones a descripciones visuales
     emotion_visuals = {
-        "curiosidad": "mirada atenta y abierta, postura exploradora",
-        "alegría": "sonrisa genuina, energía positiva",
-        "sorpresa": "ojos abiertos, expresión de descubrimiento",
-        "reflexión": "mirada pensativa, momento contemplativo",
-        "determinación": "expresión enfocada, postura firme",
-        "nostalgia": "mirada suave, atmósfera melancólica",
-        "esperanza": "mirada hacia el horizonte, luz cálida",
-        "gratitud": "expresión serena, conexión con el entorno"
+        "curiosidad": "mirada atenta y abierta, postura exploradora, descubrimiento",
+        "asombro": "ojos ampliamente abiertos, momento de revelación, maravilla",
+        "confusión": "expresión pensativa, búsqueda interna, incertidumbre",
+        "empatía": "mirada cálida y comprensiva, conexión humana",
+        "ternura": "suavidad en la expresión, intimidad, delicadeza",
+        "soledad": "figura contemplativa, espacio vacío, introspección",
+        "memoria": "mirada distante, nostalgia, remembranza",
+        "aceptación": "serenidad en el rostro, paz interior, calma",
+        "libertad": "apertura, expansión, movimiento fluido"
     }
     
-    # Mapeo de ubicaciones a settings visuales
-    location_settings = {
-        "ciudad": "entorno urbano moderno, arquitectura contemporánea",
-        "parque": "naturaleza verde, espacio abierto, luz natural",
-        "café": "interior acogedor, luz suave, ambiente íntimo",
-        "playa": "costa, arena, luz dorada, horizonte marino",
-        "montaña": "paisaje montañoso, altura, perspectiva amplia",
-        "hogar": "interior cálido, espacio personal, comodidad",
-        "biblioteca": "estanterías de libros, ambiente tranquilo, luz cálida",
-        "mercado": "colores vibrantes, actividad, ambiente cultural"
-    }
+    emotion_visual = emotion_visuals.get(emotion, "expresión auténtica y natural")
     
-    emotion_visual = emotion_visuals.get(emotion, "expresión auténtica")
-    location_setting = location_settings.get(location, "entorno natural")
-    
-    # Construir prompt para imagen
-    prompt = f"""professional portrait photograph, {style_notes}, 
-{location_setting}, {emotion_visual},
-natural lighting, high quality, detailed, instagram aesthetic,
-cinematic composition, depth of field, 8k, photorealistic"""
+    # Componer prompt para imagen
+    prompt = f"""portrait photograph, {style_notes}, 
+cinematic composition, {location}, {emotion_visual},
+soft natural lighting, {color_desc}, depth of field,
+intimate and contemplative mood, authentic moment,
+high quality, detailed, photorealistic, 8k"""
     
     logger.info(f"Image prompt generado: {prompt[:100]}...")
     
