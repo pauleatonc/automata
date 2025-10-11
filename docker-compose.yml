@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  influencer-backend:
+    build: .
+    container_name: ai-influencer-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Volumen para persistencia de datos
+      - ./data:/data
+      # Volumen para identity pack (imágenes de referencia)
+      - ./identity_pack:/identity_pack:ro
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/influencer.db
+      - DATA_PATH=/data
+      - IDENTITY_PACK_PATH=/identity_pack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - influencer-network
+
+networks:
+  influencer-network:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local
+

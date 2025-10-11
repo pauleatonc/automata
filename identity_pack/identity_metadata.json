@@ -1,0 +1,18 @@
+{
+  "reference_images": [
+    "reference1.jpg",
+    "reference2.jpg",
+    "reference3.jpg"
+  ],
+  "influencer_name": "Mi Influencer IA",
+  "description": "Influencer de estilo de vida, moda y bienestar",
+  "style_notes": "Fotografías naturales, iluminación suave, estética moderna y minimalista",
+  "themes": [
+    "lifestyle",
+    "fitness",
+    "fashion",
+    "wellness",
+    "travel"
+  ]
+}
+
