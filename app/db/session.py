@@ -7,8 +7,9 @@ from app.core.config import settings
 from app.models.base import Base
 import os
 
-# Asegurar que el directorio de datos existe
+# Asegurar que el directorio de datos existe con permisos correctos
 os.makedirs(settings.DATA_PATH, exist_ok=True)
+os.chmod(settings.DATA_PATH, 0o777)
 
 # Motor de base de datos
 engine = create_engine(

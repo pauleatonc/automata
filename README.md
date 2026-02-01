@@ -1,11 +1,11 @@
 # AI Influencer Backend 🤖✨
 
-Backend automatizado para generar posts diarios de un influencer IA con texto generado por OpenAI e imágenes generadas por Replicate (SDXL + InstantID).
+Backend automatizado para generar posts diarios de un influencer IA con texto generado por OpenAI e imágenes generadas por Replicate (SDXL + Nano-banana).
 
 ## 🚀 Características
 
 - ✅ **Generación automática de texto** con OpenAI API (GPT-4o-mini)
-- ✅ **Generación de imágenes** con Replicate (SDXL + InstantID/IP-Adapter FaceID)
+- ✅ **Generación de imágenes** con Replicate (SDXL + Nano-banana/IP-Adapter FaceID)
 - ✅ **Publicación automática** en Instagram con instagrapi (opcional)
 - ✅ **Scheduler configurable** con APScheduler (ejecución diaria)
 - ✅ **API REST** con FastAPI
@@ -19,7 +19,7 @@ Backend automatizado para generar posts diarios de un influencer IA con texto ge
 - **ORM**: SQLAlchemy
 - **Database**: SQLite (configurable a PostgreSQL)
 - **IA Texto**: OpenAI API
-- **IA Imagen**: Replicate (SDXL + InstantID)
+- **IA Imagen**: Replicate (SDXL + Nano-banana)
 - **Instagram**: instagrapi
 - **Despliegue**: Docker + Docker Compose
 
@@ -93,7 +93,7 @@ REPLICATE_API_TOKEN=tu-token-de-replicate
 # Instagram (Optional)
 INSTAGRAM_USERNAME=tu_usuario_instagram
 INSTAGRAM_PASSWORD=tu_password_instagram
-INSTAGRAM_ENABLED=true
+PUBLISH_TO_INSTAGRAM=true
 
 # Scheduler Configuration
 DAILY_CRON=0 9 * * *  # 9 AM todos los días
@@ -215,6 +215,56 @@ curl "http://localhost:8000/api/v1/health"
   "timestamp": "2025-01-01T09:00:00"
 }
 ```
+
+## 📋 Proceso de Publicación Automática
+
+### 1. Configuración del Scheduler
+**Archivo:** `app/core/scheduler.py`
+- Configura un scheduler usando APScheduler con expresión CRON
+- Por defecto: `"0 9 * * *"` (9 AM todos los días)
+- Zona horaria: `America/Santiago`
+- Se puede habilitar/deshabilitar con `ENABLE_SCHEDULER=true/false`
+
+### 2. Inicialización del Sistema
+**Archivo:** `app/main.py`
+- Al iniciar la aplicación, se configura el scheduler
+- Se asigna la función `generate_daily_post` como job
+- El scheduler se inicia automáticamente si está habilitado
+
+### 3. Job Diario Programado
+**Archivo:** `app/jobs/daily_job.py`
+- Función `generate_daily_post()` que se ejecuta según el CRON
+- Llama a `state_engine.generate_post()` con:
+  - `trigger_type="scheduled"`
+  - `publish_to_instagram` basado en configuración
+
+### 4. Motor de Estado (FALTA IMPLEMENTAR)
+**Archivo:** `app/services/state_engine.py`
+  - Cargar identity metadata
+  - Obtener estado actual
+  - Calcular siguiente estado
+  - Generar caption
+  - Generar imagen
+  - Guardar en BD
+  - Publicar en Instagram
+
+### 5. Generación de Contenido
+**Archivos involucrados:**
+- `app/services/text_gen.py` - Genera captions con OpenAI
+- `app/services/image_gen.py` - Genera imágenes con Replicate
+- `app/services/state_engine.py` - Evolución narrativa (capítulos, emociones, ubicaciones)
+
+### 6. Publicación en Instagram
+**Archivo:** `app/services/publish_instagram.py`
+- Clase `InstagramPublisher` que maneja la publicación
+- Se habilita con `PUBLISH_TO_INSTAGRAM=true`
+- Requiere credenciales: `INSTAGRAM_USERNAME` y `INSTAGRAM_PASSWORD`
+- Maneja reintentos y rate limits
+
+### 7. Configuración
+**Archivos:**
+- `app/core/config.py` - Configuración principal
+- `env.example` - Variables de entorno necesarias
 
 ## ⏰ Scheduler
 

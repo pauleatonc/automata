@@ -130,7 +130,7 @@ async def generate_now(
             prompt=image_prompt,
             state=new_state,
             identity_meta=identity_meta,
-            model="instantid"
+            model="Nano-banana"
         )
         logger.info(f"Imagen generada: {image_path}")
         

@@ -22,15 +22,15 @@ class Settings(BaseSettings):
     # Instagram (opcional)
     INSTAGRAM_USERNAME: Optional[str] = None
     INSTAGRAM_PASSWORD: Optional[str] = None
-    INSTAGRAM_ENABLED: bool = False
+    PUBLISH_TO_INSTAGRAM: bool = False
     
     # Scheduler
     DAILY_CRON: str = "0 9 * * *"  # 9 AM todos los días
     TIMEZONE: str = "America/Santiago"
     
     # Rutas
-    IDENTITY_PACK_PATH: str = "/identity_pack"
-    DATA_PATH: str = "/data"
+    IDENTITY_PACK_PATH: str = "./identity_pack"
+    DATA_PATH: str = "./data"
     
     # Prompts
     POST_PROMPT_TEMPLATE: str = """Genera un post para Instagram de un influencer de {theme}.

@@ -119,7 +119,7 @@ def root():
         "features": [
             "Generación automática de posts con IA",
             "Narrativa evolutiva con state engine",
-            "Generación de imágenes con InstantID/IP-Adapter",
+            "Generación de imágenes con Nano Banana (refs múltiples) + soporte opcional InstantID/IP-Adapter",
             "Publicación automática en Instagram",
             "Scheduler configurable"
         ]

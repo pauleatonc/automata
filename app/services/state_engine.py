@@ -3,12 +3,16 @@ Motor de estado - Gestiona la evolución narrativa del influencer
 """
 import json
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timedelta
+from pathlib import Path
 from sqlalchemy.orm import Session
 from app.models.post import Post
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.services.text_gen import generate_caption, generate_image_prompt
+from app.services.image_gen import generate_image
+from app.services.publish_instagram import instagram_publisher
 
 logger = get_logger(__name__)
 
@@ -86,6 +90,41 @@ def get_current_state(db: Session) -> Dict[str, Any]:
             "location": "Santiago",
             "meta": {"post_count": 0, "days_elapsed": 0}
         }
+
+
+def get_recent_posts_context(db: Session, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Obtiene los posts recientes para contexto en generación
+    
+    Args:
+        db: Sesión de base de datos
+        limit: Número de posts recientes a obtener
+        
+    Returns:
+        List[Dict]: Lista de posts recientes con información relevante
+    """
+    try:
+        recent_posts = db.query(Post).order_by(Post.created_at.desc()).limit(limit).all()
+        
+        context = []
+        for post in recent_posts:
+            context.append({
+                "id": post.id,
+                "created_at": post.created_at.isoformat() if post.created_at else None,
+                "chapter": post.chapter,
+                "emotion_focus": post.emotion_focus,
+                "location": post.location,
+                "caption": post.caption,
+                "image_path": post.image_path,
+                "meta": post.meta or {}
+            })
+        
+        logger.info(f"Contexto de {len(context)} posts recientes cargado")
+        return context
+        
+    except Exception as e:
+        logger.error(f"Error al obtener contexto de posts: {e}")
+        return []
 
 
 def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -396,6 +435,197 @@ class StateEngine:
     def get_metadata(self) -> Dict[str, Any]:
         """Devuelve el metadata cargado"""
         return self.metadata
+    
+    async def generate_post(
+        self, 
+        db: Session, 
+        trigger_type: str = "manual",
+        publish_to_instagram: bool = False
+    ) -> Tuple[bool, Optional[Post], Optional[str]]:
+        """
+        Pipeline completa de generación de post
+        
+        Args:
+            db: Sesión de base de datos
+            trigger_type: Tipo de trigger ("manual", "scheduled", "api")
+            publish_to_instagram: Si se debe publicar automáticamente en Instagram
+            
+        Returns:
+            Tuple[bool, Optional[Post], Optional[str]]: (success, post, error_message)
+        """
+        logger.info(f"🚀 Iniciando pipeline de generación (trigger: {trigger_type})")
+        
+        try:
+            # 1. Cargar identity metadata
+            logger.info("Paso 1/7: Cargando identity metadata...")
+            identity_meta = self.get_metadata()
+            
+            if not identity_meta:
+                logger.warning("Identity metadata vacío, usando valores por defecto")
+                identity_meta = {
+                    "influencer_name": "Influencer IA",
+                    "description": "Un viaje de autodescubrimiento",
+                    "style_notes": "fotografía natural y auténtica"
+                }
+            
+            # 2. Obtener estado actual
+            logger.info("Paso 2/7: Obteniendo estado actual...")
+            current_state = self.get_current_state(db)
+            logger.info(f"Estado actual: {current_state.get('chapter')} / {current_state.get('emotion_focus')}")
+            
+            # 3. Calcular siguiente estado
+            logger.info("Paso 3/7: Calculando siguiente estado...")
+            new_state = self.next_state(current_state)
+            logger.info(f"Nuevo estado: {new_state.get('chapter')} / {new_state.get('emotion_focus')}")
+            
+            # 4. Obtener contexto de posts recientes
+            logger.info("Paso 4/8: Obteniendo contexto de posts recientes...")
+            recent_context = get_recent_posts_context(db, limit=3)
+            
+            # 5. Generar caption con contexto
+            logger.info("Paso 5/8: Generando caption con OpenAI...")
+            caption = generate_caption(new_state, identity_meta, recent_context)
+            logger.info(f"Caption generado: {len(caption)} caracteres")
+            
+            # 6. Generar prompt de imagen
+            logger.info("Paso 6/8: Generando prompt de imagen...")
+            image_prompt = generate_image_prompt(new_state, identity_meta)
+            logger.info(f"Image prompt: {image_prompt[:100]}...")
+            
+            # 7. Generar imagen
+            logger.info("Paso 7/8: Generando imagen con Replicate...")
+            image_path = await generate_image(
+                prompt=image_prompt,
+                state=new_state,
+                identity_meta=identity_meta,
+                model="Nano-banana"
+            )
+            logger.info(f"Imagen generada: {image_path}")
+            
+            # 8. Guardar en base de datos
+            logger.info("Paso 8/8: Guardando en base de datos...")
+            new_post = Post(
+                chapter=new_state.get("chapter"),
+                emotion_focus=new_state.get("emotion_focus"),
+                learning_goal=new_state.get("learning_goal"),
+                location=new_state.get("location"),
+                caption=caption,
+                image_prompt=image_prompt,
+                image_path=image_path,
+                published_platforms={},
+                meta=new_state.get("meta", {})
+            )
+            
+            db.add(new_post)
+            db.commit()
+            db.refresh(new_post)
+            
+            logger.info(f"✅ Post guardado con ID: {new_post.id}")
+            
+            # 9. Actualizar identity pack con imagen generada (opcional)
+            logger.info("Paso 9/9: Evaluando actualización del identity pack...")
+            await self._update_identity_pack_if_needed(new_post, identity_meta)
+            
+            # 10. Publicar en Instagram (opcional)
+            if publish_to_instagram and instagram_publisher.is_enabled():
+                logger.info("📱 Publicando en Instagram...")
+                try:
+                    media_id = instagram_publisher.publish_post(image_path, caption)
+                    
+                    if media_id:
+                        new_post.published_platforms = {"instagram": media_id}
+                        db.commit()
+                        logger.info(f"✅ Publicado en Instagram: {media_id}")
+                    else:
+                        logger.warning("⚠️ Fallo al publicar en Instagram")
+                except Exception as e:
+                    logger.error(f"❌ Error al publicar en Instagram: {str(e)}")
+                    # No fallar todo el proceso por error de Instagram
+            elif publish_to_instagram and not instagram_publisher.is_enabled():
+                logger.info("⏸️ Publicación en Instagram solicitada pero no habilitada")
+            
+            logger.info(f"🎉 Pipeline completada exitosamente: Post ID {new_post.id}")
+            return True, new_post, None
+            
+        except Exception as e:
+            logger.error(f"❌ Error en pipeline de generación: {str(e)}")
+            db.rollback()
+            return False, None, str(e)
+    
+    async def _update_identity_pack_if_needed(self, post: Post, identity_meta: Dict[str, Any]) -> None:
+        """
+        Evalúa si la imagen generada debe agregarse al identity pack
+        
+        Criterios:
+        - Solo cada N posts (configurable)
+        - Solo si la imagen es de alta calidad
+        - Solo si no hay demasiadas imágenes en el pack
+        
+        Args:
+            post: Post recién generado
+            identity_meta: Metadata actual del identity pack
+        """
+        try:
+            # Configuración
+            max_identity_images = 8  # Máximo de imágenes en el identity pack
+            update_frequency = 5     # Actualizar cada 5 posts
+            
+            # Verificar si debemos actualizar
+            post_count = post.meta.get("post_count", 0) if post.meta else 0
+            if post_count % update_frequency != 0:
+                logger.info(f"No es momento de actualizar identity pack (post #{post_count})")
+                return
+            
+            # Separar imágenes base de las generadas
+            current_images = identity_meta.get("reference_images", [])
+            base_images = identity_meta.get("base_images", current_images[:4])  # Primeras 4 son base
+            generated_images = [img for img in current_images if img.startswith("generated_")]
+            
+            # Verificar límite de imágenes generadas (preservando siempre las base)
+            max_generated_images = max_identity_images - len(base_images)
+            if len(generated_images) >= max_generated_images:
+                logger.info(f"Identity pack ya tiene {len(generated_images)} imágenes generadas (máximo: {max_generated_images})")
+                return
+            
+            # Copiar imagen al identity pack
+            if post.image_path and os.path.exists(post.image_path):
+                identity_pack_dir = Path(settings.IDENTITY_PACK_PATH)
+                identity_pack_dir.mkdir(exist_ok=True)
+                
+                # Nombre para la nueva imagen
+                new_image_name = f"generated_{post.id}_{post.created_at.strftime('%Y%m%d')}.png"
+                new_image_path = identity_pack_dir / new_image_name
+                
+                # Copiar imagen
+                import shutil
+                shutil.copy2(post.image_path, new_image_path)
+                
+                # Actualizar metadata manteniendo separación base/generadas
+                updated_generated_images = generated_images + [new_image_name]
+                updated_reference_images = base_images + updated_generated_images
+                
+                # Cargar y actualizar el archivo JSON
+                metadata_path = identity_pack_dir / "identity_metadata.json"
+                if metadata_path.exists():
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                    
+                    # Actualizar listas separadas
+                    metadata["reference_images"] = updated_reference_images
+                    metadata["base_images"] = base_images
+                    metadata["generated_images"] = updated_generated_images
+                    
+                    with open(metadata_path, 'w', encoding='utf-8') as f:
+                        json.dump(metadata, f, indent=2, ensure_ascii=False)
+                    
+                    logger.info(f"✅ Identity pack actualizado con nueva imagen: {new_image_name}")
+                    logger.info(f"📸 Imágenes base: {len(base_images)}, Generadas: {len(updated_generated_images)}, Total: {len(updated_reference_images)}")
+                else:
+                    logger.warning("No se encontró archivo identity_metadata.json para actualizar")
+            
+        except Exception as e:
+            logger.error(f"Error al actualizar identity pack: {str(e)}")
+            # No fallar el proceso principal por este error
 
 
 # Instancia singleton (opcional)

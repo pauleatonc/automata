@@ -31,10 +31,8 @@ class InstagramPublisher:
     
     def _check_if_enabled(self) -> bool:
         """Verifica si la publicación en Instagram está habilitada"""
-        publish_enabled = os.getenv("PUBLISH_TO_INSTAGRAM", "false").lower() == "true"
-        
-        if not publish_enabled:
-            logger.info("Publicación en Instagram deshabilitada (PUBLISH_TO_INSTAGRAM != true)")
+        if not settings.PUBLISH_TO_INSTAGRAM:
+            logger.info("Publicación en Instagram deshabilitada (PUBLISH_TO_INSTAGRAM=false)")
             return False
         
         # Verificar credenciales

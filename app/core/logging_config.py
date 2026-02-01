@@ -33,6 +33,12 @@ def setup_logging(log_level: str = "INFO"):
     logging.getLogger("fastapi").setLevel(logging.INFO)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     
+    # Silenciar logs de HTTP requests (httpx, requests, urllib3)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    
     return root_logger
 
 

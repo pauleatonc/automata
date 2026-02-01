@@ -25,8 +25,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código de la aplicación
 COPY ./app /app/app
 
-# Crear directorios necesarios
-RUN mkdir -p /data /identity_pack
+# Crear directorios necesarios con permisos correctos
+RUN mkdir -p /data /identity_pack && \
+    chmod 777 /data /identity_pack && \
+    chown -R root:root /data /identity_pack
 
 # Exponer puerto
 EXPOSE 8000

@@ -19,7 +19,7 @@ def check_env_vars():
     checks = {
         "OpenAI API Key": bool(settings.OPENAI_API_KEY),
         "Replicate Token": bool(settings.REPLICATE_API_TOKEN),
-        "Instagram Enabled": settings.INSTAGRAM_ENABLED,
+        "Publish to Instagram": settings.PUBLISH_TO_INSTAGRAM,
         "Database URL": bool(settings.DATABASE_URL),
         "Daily Cron": bool(settings.DAILY_CRON),
     }
