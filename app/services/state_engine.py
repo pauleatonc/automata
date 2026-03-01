@@ -11,7 +11,8 @@ from app.models.post import Post
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.services.text_gen import generate_caption, generate_image_prompt
-from app.services.image_gen import generate_image
+from app.services.image_gen import generate_image, select_visual_decision
+from app.services.identity_metadata_adapter import normalize_identity_metadata
 from app.services.publish_instagram import instagram_publisher
 
 logger = get_logger(__name__)
@@ -30,7 +31,7 @@ def load_identity_metadata(path: str) -> Dict[str, Any]:
     try:
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+                metadata = normalize_identity_metadata(json.load(f))
                 logger.info(f"Metadata cargado desde {path}")
                 return metadata
         else:
@@ -127,7 +128,11 @@ def get_recent_posts_context(db: Session, limit: int = 5) -> List[Dict[str, Any]
         return []
 
 
-def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def next_state(
+    prev_state: Dict[str, Any],
+    feedback: Optional[Dict[str, Any]] = None,
+    identity_meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Calcula el siguiente estado aplicando reglas de evolución narrativa
     
@@ -164,7 +169,7 @@ def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = 
         new_state["chapter"] = feedback["force_chapter"]
         logger.info(f"Capítulo forzado por feedback: {feedback['force_chapter']}")
     else:
-        new_state["chapter"] = _evolve_chapter_by_days(days_elapsed)
+        new_state["chapter"] = _evolve_chapter_by_days(days_elapsed, identity_meta)
     
     # 2. EVOLUCIÓN DE EMOCIÓN (ciclo de 9 emociones)
     if force_emotion:
@@ -174,7 +179,10 @@ def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = 
         new_state["emotion_focus"] = feedback["emotion"]
         logger.info(f"Emoción forzada por feedback: {feedback['emotion']}")
     else:
-        new_state["emotion_focus"] = _evolve_emotion(prev_state.get("emotion_focus", "curiosidad"))
+        new_state["emotion_focus"] = _evolve_emotion(
+            prev_state.get("emotion_focus", "curiosidad"),
+            identity_meta
+        )
     
     # 3. EVOLUCIÓN DE UBICACIÓN (arco narrativo geográfico)
     if force_location:
@@ -186,11 +194,12 @@ def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = 
     else:
         new_state["location"] = _evolve_location_by_arc(
             days_elapsed, 
-            prev_state.get("location", "Santiago")
+            prev_state.get("location", "Santiago"),
+            identity_meta
         )
     
     # 4. EVOLUCIÓN DE LEARNING GOAL (según capítulo)
-    new_state["learning_goal"] = _evolve_learning_goal(new_state["chapter"])
+    new_state["learning_goal"] = _evolve_learning_goal(new_state["chapter"], identity_meta)
     
     # 5. ACTUALIZAR META
     new_state["meta"] = {
@@ -206,7 +215,7 @@ def next_state(prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = 
     return new_state
 
 
-def _evolve_chapter_by_days(days_elapsed: int) -> str:
+def _evolve_chapter_by_days(days_elapsed: int, identity_meta: Optional[Dict[str, Any]] = None) -> str:
     """
     Evoluciona el capítulo según ventanas de días
     
@@ -222,17 +231,32 @@ def _evolve_chapter_by_days(days_elapsed: int) -> str:
     Returns:
         str: Capítulo correspondiente
     """
+    narrative = ((identity_meta or {}).get("narrative", {}) or {})
+    chapter_windows = narrative.get("chapter_windows", []) or []
+    if isinstance(chapter_windows, list) and chapter_windows:
+        for item in chapter_windows:
+            if not isinstance(item, dict):
+                continue
+            chapter_name = item.get("name")
+            min_days = int(item.get("min_days", 0))
+            max_days = item.get("max_days")
+            if max_days is None:
+                if days_elapsed >= min_days and chapter_name:
+                    return chapter_name
+            else:
+                if min_days <= days_elapsed < int(max_days) and chapter_name:
+                    return chapter_name
+
     if days_elapsed < 60:
         return "despertar"
-    elif days_elapsed < 120:
+    if days_elapsed < 120:
         return "búsqueda"
-    elif days_elapsed < 180:
+    if days_elapsed < 180:
         return "encuentro"
-    else:
-        return "integración"
+    return "integración"
 
 
-def _evolve_emotion(current_emotion: str) -> str:
+def _evolve_emotion(current_emotion: str, identity_meta: Optional[Dict[str, Any]] = None) -> str:
     """
     Rotación de emociones en ciclo de 9
     
@@ -246,7 +270,8 @@ def _evolve_emotion(current_emotion: str) -> str:
     Returns:
         str: Siguiente emoción en el ciclo
     """
-    emotion_cycle = [
+    narrative = ((identity_meta or {}).get("narrative", {}) or {})
+    emotion_cycle = narrative.get("emotion_cycle", []) or [
         "curiosidad",
         "asombro",
         "confusión",
@@ -271,7 +296,11 @@ def _evolve_emotion(current_emotion: str) -> str:
         return emotion_cycle[0]
 
 
-def _evolve_location_by_arc(days_elapsed: int, current_location: str) -> str:
+def _evolve_location_by_arc(
+    days_elapsed: int,
+    current_location: str,
+    identity_meta: Optional[Dict[str, Any]] = None
+) -> str:
     """
     Evoluciona la ubicación siguiendo un arco narrativo geográfico
     
@@ -288,7 +317,7 @@ def _evolve_location_by_arc(days_elapsed: int, current_location: str) -> str:
     Returns:
         str: Nueva ubicación según el arco
     """
-    # Definir arcos de ubicaciones con progresión aproximada
+    # Definir arcos de ubicaciones con progresión aproximada (fallback)
     location_arcs = [
         # Fase 1: Chile (días 0-45)
         {
@@ -339,6 +368,24 @@ def _evolve_location_by_arc(days_elapsed: int, current_location: str) -> str:
             "locations": ["Seúl, Gangnam", "Seúl, Hongdae", "Busan"]
         }
     ]
+
+    narrative = ((identity_meta or {}).get("narrative", {}) or {})
+    configured_arcs = narrative.get("location_arcs", []) or []
+    if isinstance(configured_arcs, list) and configured_arcs:
+        parsed_arcs = []
+        for arc in configured_arcs:
+            if not isinstance(arc, dict):
+                continue
+            min_days = int(arc.get("min_days", 0))
+            max_days = arc.get("max_days", 999)
+            if max_days is None:
+                max_days = 999
+            locations = arc.get("locations", []) or []
+            if not locations:
+                continue
+            parsed_arcs.append({"range": (min_days, int(max_days)), "locations": locations})
+        if parsed_arcs:
+            location_arcs = parsed_arcs
     
     # Encontrar el arco correspondiente a los días actuales
     for arc in location_arcs:
@@ -361,7 +408,7 @@ def _evolve_location_by_arc(days_elapsed: int, current_location: str) -> str:
     return "Seúl, Hongdae"
 
 
-def _evolve_learning_goal(chapter: str) -> str:
+def _evolve_learning_goal(chapter: str, identity_meta: Optional[Dict[str, Any]] = None) -> str:
     """
     Define el learning goal según el capítulo actual
     
@@ -371,7 +418,8 @@ def _evolve_learning_goal(chapter: str) -> str:
     Returns:
         str: Learning goal apropiado para el capítulo
     """
-    chapter_goals = {
+    narrative = ((identity_meta or {}).get("narrative", {}) or {})
+    chapter_goals = narrative.get("learning_goals", {}) or {
         "despertar": "descubrir quién soy y qué busco en este mundo",
         "búsqueda": "encontrar conexiones auténticas y mi voz interior",
         "encuentro": "integrar experiencias y comprender mi propósito",
@@ -430,11 +478,11 @@ class StateEngine:
     
     def next_state(self, prev_state: Dict[str, Any], feedback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Calcula el siguiente estado"""
-        return next_state(prev_state, feedback)
+        return next_state(prev_state, feedback, self.get_metadata())
     
     def get_metadata(self) -> Dict[str, Any]:
         """Devuelve el metadata cargado"""
-        return self.metadata
+        return normalize_identity_metadata(self.metadata)
     
     async def generate_post(
         self, 
@@ -481,22 +529,51 @@ class StateEngine:
             # 4. Obtener contexto de posts recientes
             logger.info("Paso 4/8: Obteniendo contexto de posts recientes...")
             recent_context = get_recent_posts_context(db, limit=3)
+
+            # 4.1 Seleccionar dirección visual con memoria reciente
+            recent_visual_decisions = []
+            for prev in recent_context:
+                prev_meta = (prev.get("meta", {}) or {})
+                prev_decision = prev_meta.get("visual_decision")
+                if isinstance(prev_decision, dict):
+                    recent_visual_decisions.append(prev_decision)
+
+            runtime_state = dict(new_state)
+            runtime_meta = dict(new_state.get("meta", {}) or {})
+            runtime_meta["recent_visual_decisions"] = recent_visual_decisions
+            runtime_state["meta"] = runtime_meta
+
+            selected_visual = select_visual_decision(runtime_state, identity_meta)
+            runtime_meta["visual_decision"] = selected_visual
+            runtime_state["meta"] = runtime_meta
+
+            # Persistir solo la decisión aplicada (no toda la ventana histórica)
+            new_state["meta"] = {
+                **(new_state.get("meta", {}) or {}),
+                "visual_decision": selected_visual
+            }
+            logger.info(
+                "Dirección visual: shot=%s pose=%s scene=%s",
+                selected_visual.get("shot_type"),
+                selected_visual.get("pose"),
+                selected_visual.get("scene_type"),
+            )
             
             # 5. Generar caption con contexto
             logger.info("Paso 5/8: Generando caption con OpenAI...")
-            caption = generate_caption(new_state, identity_meta, recent_context)
+            caption = generate_caption(runtime_state, identity_meta, recent_context)
             logger.info(f"Caption generado: {len(caption)} caracteres")
             
             # 6. Generar prompt de imagen
             logger.info("Paso 6/8: Generando prompt de imagen...")
-            image_prompt = generate_image_prompt(new_state, identity_meta)
+            image_prompt = generate_image_prompt(runtime_state, identity_meta)
             logger.info(f"Image prompt: {image_prompt[:100]}...")
             
             # 7. Generar imagen
             logger.info("Paso 7/8: Generando imagen con Replicate...")
             image_path = await generate_image(
                 prompt=image_prompt,
-                state=new_state,
+                state=runtime_state,
                 identity_meta=identity_meta,
                 model="Nano-banana"
             )
@@ -610,10 +687,15 @@ class StateEngine:
                     with open(metadata_path, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     
-                    # Actualizar listas separadas
+                    # Actualizar listas separadas (legacy + estructura por proceso)
                     metadata["reference_images"] = updated_reference_images
                     metadata["base_images"] = base_images
                     metadata["generated_images"] = updated_generated_images
+                    assets = metadata.get("assets", {}) or {}
+                    assets["reference_images"] = updated_reference_images
+                    assets["base_images"] = base_images
+                    assets["generated_images"] = updated_generated_images
+                    metadata["assets"] = assets
                     
                     with open(metadata_path, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, indent=2, ensure_ascii=False)

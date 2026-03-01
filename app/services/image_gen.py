@@ -9,19 +9,199 @@ import random
 import httpx
 import base64
 import mimetypes
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.services.identity_metadata_adapter import normalize_identity_metadata
 
 logger = get_logger(__name__)
+
+SAFE_IMAGE_DEFAULTS: Dict[str, Any] = {
+    "identity_strength": 0.8,
+    "style_strength": 0.7,
+    "composition_policy": {
+        "shot_weights": {"portrait_close": 0.45, "half_body": 0.35, "full_body": 0.20},
+        "pose_weights": {"standing": 0.35, "walking": 0.20, "sitting": 0.20, "candid": 0.15, "dynamic": 0.10},
+        "scene_weights": {"urban": 0.45, "rural": 0.20, "interior": 0.20, "coastal": 0.10, "mountain": 0.05},
+    },
+    "mood_controls": {
+        "cheerful_boost": ["gentle smile", "warm expression", "soft joy"],
+        "neutral_dial": ["calm presence", "contemplative", "serene"],
+        "positive_emotions": ["asombro", "ternura", "aceptación", "libertad", "empatía"],
+    },
+    "generation_defaults": {
+        "stable_diffusion": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+        },
+        "model_input_defaults": {
+            "num_inference_steps": 30,
+            "guidance_scale": 7.5,
+            "output_format": "png",
+            "output_quality": 95,
+            "enable_pose_controlnet": False,
+            "pose_strength": 0.35,
+            "enable_canny_controlnet": False,
+            "canny_strength": 0.3,
+            "enable_depth_controlnet": False,
+            "depth_strength": 0.5,
+            "enable_lcm": False,
+            "sdxl_weights": "stable-diffusion-xl-base-1.0",
+            "scheduler": "EulerDiscreteScheduler",
+            "face_detection_input_width": 640,
+            "face_detection_input_height": 640,
+            "num_outputs": 1,
+        },
+    },
+}
 
 
 def _pick_from(lst):
     """Helper para muestrear elementos de una lista"""
     import random
     return random.choice(lst) if isinstance(lst, list) and lst else None
+
+
+def _weighted_choice(weight_map: Dict[str, float]) -> str:
+    """Elige una clave basada en pesos positivos."""
+    if not weight_map:
+        return ""
+    items = []
+    for key, value in weight_map.items():
+        try:
+            w = float(value)
+        except (TypeError, ValueError):
+            w = 0.0
+        if w > 0:
+            items.append((key, w))
+    if not items:
+        return next(iter(weight_map.keys()), "")
+    keys, weights = zip(*items)
+    return random.choices(list(keys), weights=list(weights), k=1)[0]
+
+
+def _scene_cue(scene_type: str, location: str, identity_meta: Dict[str, Any]) -> str:
+    """Construye cue de escena mezclando tipo y ubicación."""
+    ig = (identity_meta.get("image_prompt_guidelines", {}) or {})
+    base_by_scene = ig.get("scene_type_cues", {}) or {}
+    base = base_by_scene.get(scene_type, "contemporary environment with natural details")
+    location_hint = _extract_location_cue(location, identity_meta)
+    policy = ig.get("location_render_policy", {}) or {}
+    include_name = bool(policy.get("use_explicit_place_name_in_image_prompt", False))
+    if include_name:
+        return f"{base}, {location_hint}, inspired by {location}"
+    return f"{base}, {location_hint}"
+
+
+def _normalize_text(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_text = decomposed.encode("ascii", "ignore").decode("ascii")
+    return ascii_text.lower()
+
+
+def _pick_n(values: Any, n: int) -> list[str]:
+    if not isinstance(values, list) or not values:
+        return []
+    n = max(0, min(n, len(values)))
+    if n == 0:
+        return []
+    return random.sample([str(v) for v in values], k=n)
+
+
+def _match_location_profile(location: str, identity_meta: Dict[str, Any]) -> Dict[str, Any]:
+    ig = (identity_meta.get("image_prompt_guidelines", {}) or {})
+    profiles = ig.get("location_profiles", {}) or {}
+    if not isinstance(profiles, dict):
+        return {}
+
+    location_norm = _normalize_text(location)
+    for key, profile in profiles.items():
+        key_norm = _normalize_text(str(key))
+        aliases = profile.get("aliases", []) if isinstance(profile, dict) else []
+        aliases_norm = [_normalize_text(str(a)) for a in aliases if a]
+        if key_norm and key_norm in location_norm:
+            return profile if isinstance(profile, dict) else {}
+        for alias_norm in aliases_norm:
+            if alias_norm and alias_norm in location_norm:
+                return profile if isinstance(profile, dict) else {}
+    return {}
+
+
+def select_visual_decision(state: Dict[str, Any], identity_meta: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Selecciona encuadre/pose/escena con aleatoriedad controlada y coherente.
+    """
+    identity_meta = normalize_identity_metadata(identity_meta)
+    state_meta = (state.get("meta", {}) or {})
+    composition = (identity_meta.get("composition_policy", {}) or {})
+
+    emotion = state.get("emotion_focus", "curiosidad")
+    chapter = state.get("chapter", "despertar")
+    location = state.get("location", "ciudad")
+
+    composition_fallback = SAFE_IMAGE_DEFAULTS["composition_policy"]
+    shot_weights = composition.get("shot_weights", composition_fallback["shot_weights"])
+    pose_weights = composition.get("pose_weights", composition_fallback["pose_weights"])
+    scene_weights = composition.get("scene_weights", composition_fallback["scene_weights"])
+
+    # Ajustes narrativos por emoción/capítulo si existen
+    emotion_overrides = (composition.get("emotion_overrides", {}) or {}).get(emotion, {}) or {}
+    chapter_overrides = (composition.get("chapter_overrides", {}) or {}).get(chapter, {}) or {}
+
+    def _apply_overrides(base: Dict[str, float], override: Dict[str, Any]) -> Dict[str, float]:
+        merged = dict(base)
+        for key, value in (override or {}).items():
+            try:
+                merged[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return merged
+
+    shot_weights = _apply_overrides(shot_weights, emotion_overrides.get("shot_weights"))
+    shot_weights = _apply_overrides(shot_weights, chapter_overrides.get("shot_weights"))
+    pose_weights = _apply_overrides(pose_weights, emotion_overrides.get("pose_weights"))
+    pose_weights = _apply_overrides(pose_weights, chapter_overrides.get("pose_weights"))
+    scene_weights = _apply_overrides(scene_weights, emotion_overrides.get("scene_weights"))
+    scene_weights = _apply_overrides(scene_weights, chapter_overrides.get("scene_weights"))
+
+    # Evita repeticiones recientes de encuadre/pose
+    no_repeat_window = int(composition.get("no_repeat_window", 4))
+    recent = state_meta.get("recent_visual_decisions", []) or []
+    if isinstance(recent, list):
+        recent = recent[:no_repeat_window]
+    else:
+        recent = []
+
+    repeated_shots = {d.get("shot_type") for d in recent if isinstance(d, dict)}
+    repeated_poses = {d.get("pose") for d in recent if isinstance(d, dict)}
+
+    for key in repeated_shots:
+        if key in shot_weights:
+            shot_weights[key] = max(float(shot_weights[key]) * 0.3, 0.01)
+    for key in repeated_poses:
+        if key in pose_weights:
+            pose_weights[key] = max(float(pose_weights[key]) * 0.4, 0.01)
+
+    shot_type = _weighted_choice(shot_weights)
+    pose = _weighted_choice(pose_weights)
+    scene_type = _weighted_choice(scene_weights)
+
+    shot_prompt_map = composition.get("shot_prompt_map", {}) or {}
+    pose_prompt_map = composition.get("pose_prompt_map", {}) or {}
+
+    return {
+        "shot_type": shot_type or "half_body",
+        "pose": pose or "standing",
+        "scene_type": scene_type or "urban",
+        "shot_prompt": shot_prompt_map.get(shot_type or "half_body", "half-body framing"),
+        "pose_prompt": pose_prompt_map.get(pose or "standing", "standing pose"),
+        "scene_prompt": _scene_cue(scene_type or "urban", location, identity_meta)
+    }
 
 
 def _sample_look(identity_meta: Dict[str, Any]) -> Dict[str, str]:
@@ -78,7 +258,7 @@ def load_identity_config() -> Dict[str, Any]:
     try:
         if os.path.exists(metadata_path):
             with open(metadata_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+                metadata = normalize_identity_metadata(json.load(f))
                 logger.info("Identity metadata cargado correctamente")
                 return metadata
         else:
@@ -99,6 +279,8 @@ def get_reference_images(identity_meta: Dict[str, Any]) -> list[str]:
     Returns:
         list: Rutas a imágenes de referencia
     """
+    identity_meta = normalize_identity_metadata(identity_meta)
+
     # 1) intento: nivel raíz
     ref = identity_meta.get("reference_images")
     # 2) intento: ruta usada en tu metadata real
@@ -134,8 +316,11 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
     Returns:
         str: Prompt detallado para generación de imagen
     """
+    identity_meta = normalize_identity_metadata(identity_meta)
+
     emotion = state.get("emotion_focus", "curiosidad")
     location = state.get("location", "ciudad")
+    state_meta = (state.get("meta", {}) or {})
 
     # Obtener configuraciones desde metadata
     pr = (identity_meta.get("photorealism", {}) or {})
@@ -167,28 +352,38 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
 
     # Mood controls dinámicos
     mood_controls = (identity_meta.get("mood_controls", {}) or {})
-    cheerful = mood_controls.get("cheerful_boost", ["gentle smile", "warm expression", "soft joy"])
-    neutral = mood_controls.get("neutral_dial", ["calm presence", "contemplative", "serene"])
+    mood_fallback = SAFE_IMAGE_DEFAULTS["mood_controls"]
+    cheerful = mood_controls.get("cheerful_boost", mood_fallback["cheerful_boost"])
+    neutral = mood_controls.get("neutral_dial", mood_fallback["neutral_dial"])
 
     # palabras para "alegría suave" en emociones luminosas
-    positive_emotions = {"asombro", "ternura", "aceptación", "libertad", "empatía"}
+    positive_emotions = set(mood_controls.get("positive_emotions", mood_fallback["positive_emotions"]))
     mood_tags = cheerful if emotion in positive_emotions else neutral
 
-    location_cue = _extract_location_cue(location)
+    location_cue = _extract_location_cue(location, identity_meta)
+    selected_visual = state_meta.get("visual_decision") if isinstance(state_meta.get("visual_decision"), dict) else {}
+    if not selected_visual:
+        selected_visual = select_visual_decision(state, identity_meta)
 
     # Muestrear look dinámico
     look = _sample_look(identity_meta)
     
     # Construir prompt base con look dinámico
+    base_quality_tags = ig.get(
+        "base_quality_tags",
+        "portrait or lifestyle photograph, candid feeling, high detail, photorealistic"
+    )
     base_prompt = f"""same woman as reference, feminine aesthetic,
                     light olive skin tone, grey-green eyes,
                     hairstyle: {look['hair']},
                     outfit: {look['archetype']} in {look['texture']}, accessory: {look['accessory']},
                     color palette: {look['palette']},
                     camera angle: {look['angle']}, lighting: {look['lighting']},
+                    framing: {selected_visual.get('shot_prompt', 'half-body framing')},
+                    pose: {selected_visual.get('pose_prompt', 'standing pose')},
                     mood: {", ".join(mood_tags) if mood_tags else "calm presence"},
-                    scene: {location_cue},
-                    portrait, candid feeling, high detail, photorealistic"""
+                    scene: {selected_visual.get('scene_prompt', location_cue)},
+                    {base_quality_tags}"""
 
     # Agregar todos los boosts
     if boosts:
@@ -206,7 +401,13 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
         visual_prompt = visual_prompt.replace(k, v)
 
     # Evita gris monocromo si aparece
-    visual_prompt += ", avoid monochrome grey outfits, avoid cold grey palette"
+    anti_grey_tags = ig.get("anti_grey_tags", ["avoid monochrome grey outfits", "avoid cold grey palette"])
+    if isinstance(anti_grey_tags, str):
+        anti_grey_text = anti_grey_tags
+    else:
+        anti_grey_text = ", ".join([str(x) for x in anti_grey_tags if x])
+    if anti_grey_text:
+        visual_prompt += f", {anti_grey_text}"
 
     # Remoción básica de ban_phrases
     for phrase in ban:
@@ -221,7 +422,7 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
     return visual_prompt
 
 
-def _extract_location_cue(location: str) -> str:
+def _extract_location_cue(location: str, identity_meta: Dict[str, Any]) -> str:
     """
     Extrae cue visual de la ubicación para el prompt
     
@@ -231,39 +432,36 @@ def _extract_location_cue(location: str) -> str:
     Returns:
         str: Cue visual simplificado
     """
-    # Mapeo de ubicaciones a cues visuales
-    location_cues = {
-        # Chile
-        "Santiago": "urban contemporary space, modern architecture",
-        "Lastarria": "bohemian urban corner, cultural district",
-        "Valparaíso": "colorful hillside, coastal bohemian atmosphere",
-        "Puerto Varas": "lakeside serenity, mountain backdrop",
-        "Patagonia": "vast wild landscape, raw nature",
-        
-        # Ciudades grandes
-        "Buenos Aires": "cosmopolitan cafe culture, European-inspired streets",
-        "Ciudad de México": "vibrant cultural corner, historic modernism",
-        "Tokio": "minimalist urban space, neon reflections",
-        "Londres": "rainy urban atmosphere, contemporary gallery",
-        "Berlín": "industrial-chic space, artistic underground",
-        "Seúl": "futuristic urban corner, sleek modernity",
-        
-        # Barrios específicos
-        "Palermo": "trendy neighborhood, green urban space",
-        "Roma Norte": "artistic district, mid-century architecture",
-        "Shibuya": "bustling crossing, urban energy",
-        "Shoreditch": "creative district, brick walls and art",
-        "Kreuzberg": "alternative urban corner, street culture",
-        "Hongdae": "youthful artistic quarter, creative energy"
-    }
+    ig = (identity_meta.get("image_prompt_guidelines", {}) or {})
+    policy = ig.get("location_render_policy", {}) or {}
+    profile = _match_location_profile(location, identity_meta)
+    if profile:
+        max_signatures = int(policy.get("max_visual_signatures", 3))
+        max_landmarks = int(policy.get("max_landmarks", 1))
+        max_street = int(policy.get("max_street_details", 1))
+
+        chunks: list[str] = []
+        chunks.extend(_pick_n(profile.get("visual_signatures", []), max_signatures))
+        chunks.extend(_pick_n(profile.get("landmarks", []), max_landmarks))
+        chunks.extend(_pick_n(profile.get("street_furniture", []), max_street))
+
+        climate = profile.get("climate_light")
+        if climate:
+            chunks.append(str(climate))
+
+        if chunks:
+            return ", ".join(chunks)
+
+    location_cues = ig.get("location_cues", {}) or {}
     
     # Buscar coincidencias en la ubicación
+    location_lower = location.lower()
     for key, cue in location_cues.items():
-        if key in location:
+        if str(key).lower() in location_lower:
             return cue
     
     # Fallback genérico
-    return "intimate urban space, contemporary setting"
+    return ig.get("location_fallback", "intimate urban space, contemporary setting")
 
 
 def _resolve_replicate_model_with_version(client: "replicate.Client", slug: str) -> str:
@@ -371,6 +569,7 @@ async def generate_image(
     Returns:
         str: Ruta local de la imagen guardada
     """
+    identity_meta = normalize_identity_metadata(identity_meta)
     logger.info(f"Generando imagen con modelo: {model}")
     
     # Construir prompt visual específico
@@ -378,8 +577,8 @@ async def generate_image(
     logger.info(f"Prompt visual: {visual_prompt[:100]}...")
     
     # Configuración de identity
-    identity_strength = identity_meta.get("identity_strength", 0.8)
-    style_strength = identity_meta.get("style_strength", 0.7)
+    identity_strength = identity_meta.get("identity_strength", SAFE_IMAGE_DEFAULTS["identity_strength"])
+    style_strength = identity_meta.get("style_strength", SAFE_IMAGE_DEFAULTS["style_strength"])
     
     # Obtener imágenes de referencia
     reference_images = get_reference_images(identity_meta)
@@ -410,6 +609,11 @@ async def generate_image(
             "nsfw, explicit, sexual, nude, inappropriate, blurry, low quality, distorted, bad anatomy, bad proportions, deformed, extra fingers, heavy makeup, doll-like, waxy skin, plastic skin, overprocessed"
         )
         over = (identity_meta.get("replicate_overrides", {}) or {})
+        generation_defaults = (identity_meta.get("generation_defaults", {}) or {})
+        sd_defaults = (generation_defaults.get("stable_diffusion", {}) or {})
+        model_input_defaults = (generation_defaults.get("model_input_defaults", {}) or {})
+        safe_sd_defaults = SAFE_IMAGE_DEFAULTS["generation_defaults"]["stable_diffusion"]
+        safe_model_defaults = SAFE_IMAGE_DEFAULTS["generation_defaults"]["model_input_defaults"]
 
         logger.info(f"Llamando a Replicate: {replicate_model}")
         
@@ -427,8 +631,8 @@ async def generate_image(
             inputs = {
                 "prompt": visual_prompt,
                 "negative_prompt": negative_prompt,
-                "num_inference_steps": 30,
-                "guidance_scale": 7.5,
+                "num_inference_steps": sd_defaults.get("num_inference_steps", safe_sd_defaults["num_inference_steps"]),
+                "guidance_scale": sd_defaults.get("guidance_scale", safe_sd_defaults["guidance_scale"]),
                 "seed": random.randint(1, 1_000_000),
             }
             output = client.run(replicate_model, input=inputs)
@@ -440,25 +644,25 @@ async def generate_image(
                 "image": ref_inputs[0],  # compat: los otros modelos aceptan 1 imagen
                 "prompt": visual_prompt,
                 "negative_prompt": negative_prompt,
-                "num_inference_steps": over.get("num_inference_steps", 30),
-                "guidance_scale": over.get("guidance_scale", 7.5),
-                "ip_adapter_scale": over.get("ip_adapter_scale", identity_meta.get("identity_strength", 0.8)),
-                "controlnet_conditioning_scale": over.get("controlnet_conditioning_scale", identity_meta.get("style_strength", 0.7)),
+                "num_inference_steps": over.get("num_inference_steps", model_input_defaults.get("num_inference_steps", safe_model_defaults["num_inference_steps"])),
+                "guidance_scale": over.get("guidance_scale", model_input_defaults.get("guidance_scale", safe_model_defaults["guidance_scale"])),
+                "ip_adapter_scale": over.get("ip_adapter_scale", identity_strength),
+                "controlnet_conditioning_scale": over.get("controlnet_conditioning_scale", style_strength),
                 "seed": random.randint(1, 1_000_000),
-                "output_format": over.get("output_format", "png"),
-                "output_quality": over.get("output_quality", 95),
-                "enable_pose_controlnet": over.get("enable_pose_controlnet", False),
-                "pose_strength": over.get("pose_strength", 0.35),
-                "enable_canny_controlnet": over.get("enable_canny_controlnet", False),
-                "canny_strength": over.get("canny_strength", 0.3),
-                "enable_depth_controlnet": over.get("enable_depth_controlnet", False),
-                "depth_strength": over.get("depth_strength", 0.5),
-                "enable_lcm": over.get("enable_lcm", False),
-                "sdxl_weights": over.get("sdxl_weights", "stable-diffusion-xl-base-1.0"),
-                "scheduler": over.get("scheduler", "EulerDiscreteScheduler"),
-                "face_detection_input_width": over.get("face_detection_input_width", 640),
-                "face_detection_input_height": over.get("face_detection_input_height", 640),
-                "num_outputs": over.get("num_outputs", 1),
+                "output_format": over.get("output_format", model_input_defaults.get("output_format", safe_model_defaults["output_format"])),
+                "output_quality": over.get("output_quality", model_input_defaults.get("output_quality", safe_model_defaults["output_quality"])),
+                "enable_pose_controlnet": over.get("enable_pose_controlnet", model_input_defaults.get("enable_pose_controlnet", safe_model_defaults["enable_pose_controlnet"])),
+                "pose_strength": over.get("pose_strength", model_input_defaults.get("pose_strength", safe_model_defaults["pose_strength"])),
+                "enable_canny_controlnet": over.get("enable_canny_controlnet", model_input_defaults.get("enable_canny_controlnet", safe_model_defaults["enable_canny_controlnet"])),
+                "canny_strength": over.get("canny_strength", model_input_defaults.get("canny_strength", safe_model_defaults["canny_strength"])),
+                "enable_depth_controlnet": over.get("enable_depth_controlnet", model_input_defaults.get("enable_depth_controlnet", safe_model_defaults["enable_depth_controlnet"])),
+                "depth_strength": over.get("depth_strength", model_input_defaults.get("depth_strength", safe_model_defaults["depth_strength"])),
+                "enable_lcm": over.get("enable_lcm", model_input_defaults.get("enable_lcm", safe_model_defaults["enable_lcm"])),
+                "sdxl_weights": over.get("sdxl_weights", model_input_defaults.get("sdxl_weights", safe_model_defaults["sdxl_weights"])),
+                "scheduler": over.get("scheduler", model_input_defaults.get("scheduler", safe_model_defaults["scheduler"])),
+                "face_detection_input_width": over.get("face_detection_input_width", model_input_defaults.get("face_detection_input_width", safe_model_defaults["face_detection_input_width"])),
+                "face_detection_input_height": over.get("face_detection_input_height", model_input_defaults.get("face_detection_input_height", safe_model_defaults["face_detection_input_height"])),
+                "num_outputs": over.get("num_outputs", model_input_defaults.get("num_outputs", safe_model_defaults["num_outputs"])),
             }
             try:
                 output = client.run(replicate_model, input=inputs)

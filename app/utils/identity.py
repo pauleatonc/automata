@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.services.identity_metadata_adapter import normalize_identity_metadata
 
 logger = get_logger(__name__)
 
@@ -31,7 +32,7 @@ def load_identity_metadata(metadata_path: Optional[str] = None) -> Dict[str, Any
             return get_default_metadata()
         
         with open(metadata_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
+            metadata = normalize_identity_metadata(json.load(f))
         
         # Validar metadata
         validated_metadata = validate_metadata(metadata)

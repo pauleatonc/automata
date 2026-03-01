@@ -4,10 +4,64 @@ Servicio para generación de texto con OpenAI
 from openai import OpenAI
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import random
+import unicodedata
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.services.identity_metadata_adapter import normalize_identity_metadata
 
 logger = get_logger(__name__)
+
+
+def _normalize_text(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_text = decomposed.encode("ascii", "ignore").decode("ascii")
+    return ascii_text.lower()
+
+
+def _match_location_profile(location: str, identity_meta: Dict[str, Any]) -> Dict[str, Any]:
+    ig = (identity_meta.get("image_prompt_guidelines", {}) or {})
+    profiles = ig.get("location_profiles", {}) or {}
+    if not isinstance(profiles, dict):
+        return {}
+
+    location_norm = _normalize_text(location)
+    for key, profile in profiles.items():
+        key_norm = _normalize_text(str(key))
+        aliases = profile.get("aliases", []) if isinstance(profile, dict) else []
+        aliases_norm = [_normalize_text(str(a)) for a in aliases if a]
+        if key_norm and key_norm in location_norm:
+            return profile if isinstance(profile, dict) else {}
+        for alias_norm in aliases_norm:
+            if alias_norm and alias_norm in location_norm:
+                return profile if isinstance(profile, dict) else {}
+    return {}
+
+
+def _pick_one(values: Any) -> str:
+    if isinstance(values, list) and values:
+        return str(random.choice(values))
+    return ""
+
+
+def _build_location_anchor(location: str, identity_meta: Dict[str, Any]) -> str:
+    profile = _match_location_profile(location, identity_meta)
+    if not profile:
+        return "ancla el lugar con 2-3 detalles sensoriales concretos (textura, luz, sonido, objeto urbano/rural)"
+
+    pieces = []
+    for key in ("visual_signatures", "landmarks", "street_furniture", "sensory_tokens"):
+        picked = _pick_one(profile.get(key, []))
+        if picked:
+            pieces.append(picked)
+    climate = profile.get("climate_light")
+    if climate:
+        pieces.append(str(climate))
+    if not pieces:
+        return "ancla el lugar con 2-3 detalles sensoriales concretos (textura, luz, sonido, objeto urbano/rural)"
+    return "; ".join(pieces[:4])
 
 
 def generate_caption(state: Dict[str, Any], identity_meta: Dict[str, Any], recent_context: Optional[List[Dict[str, Any]]] = None) -> str:
@@ -24,10 +78,12 @@ def generate_caption(state: Dict[str, Any], identity_meta: Dict[str, Any], recen
     Returns:
         str: Caption en español, 50-90 palabras, sin hashtags, poético e íntimo
     """
+    identity_meta = normalize_identity_metadata(identity_meta)
     logger.info(f"Generando caption para: {state.get('chapter')} / {state.get('emotion_focus')}")
     
     # Extraer información del estado
     chapter = state.get("chapter", "despertar")
+    visual_decision = ((state.get("meta", {}) or {}).get("visual_decision", {}) or {})
     emotion = state.get("emotion_focus", "curiosidad")
     goal = state.get("learning_goal", "explorar el mundo")
     location = state.get("location", "ciudad")
@@ -39,6 +95,10 @@ def generate_caption(state: Dict[str, Any], identity_meta: Dict[str, Any], recen
     palette = identity_meta.get("palette", {})
     palette_desc = palette.get("mood", "sereno") if isinstance(palette, dict) else "sereno"
     voice_tone = identity_meta.get("voice_tone", "poético e íntimo")
+    location_anchor = _build_location_anchor(location, identity_meta)
+    ig = (identity_meta.get("image_prompt_guidelines", {}) or {})
+    location_policy = ig.get("location_render_policy", {}) or {}
+    mention_place_name = bool(location_policy.get("use_explicit_place_name_in_caption", False))
     
     # Reglas de caption desde JSON
     cap_rules = (identity_meta.get("narrative_rules", {}) or {}).get("caption_guidelines", {}) or {}
@@ -73,6 +133,7 @@ MOMENTO NARRATIVO:
 - Capítulo actual: {chapter}
 - Emoción predominante: {emotion}
 - Ubicación: {location}
+- Ancla sensorial del lugar: {location_anchor}
 - Propósito interior: {goal}
 
 TEMA DEL DÍA: {daily_theme}{context_text}
@@ -90,6 +151,8 @@ INSTRUCCIONES ESPECÍFICAS:
 - Debe incluir: 1 micro-escena concreta (objeto/gesto/lugar) + 1 línea de observación irónica o autoirónica (máx. 1 línea) + 1 pregunta abierta sin moraleja
 - Evitar: autoayuda explícita, clichés motivacionales, metáforas grandilocuentes sin ancla cotidiana
 - Emojis: 0–1 como condimento, nunca como remate
+- Mostrar el lugar con señales observables (texturas, sonidos, luz, objetos), no solo nombrarlo
+- Mencionar el nombre del lugar explícitamente: {"sí, pero solo si fluye natural" if mention_place_name else "no, salvo que sea indispensable"}
 - Evocar la emoción "{emotion}" de manera sutil y lírica
 - Conectar orgánicamente con el tema "{daily_theme}"
 - Sentir como un fragmento de diario personal
@@ -163,7 +226,13 @@ Usa imágenes sensoriales y metáforas sutiles."""
         if not caption:
             # Fallback: generar caption básico
             logger.warning("Generando caption de fallback")
-            caption = f"En {state.get('location', 'este lugar')}, donde la {state.get('emotion_focus', 'emoción')} se entrelaza con la luz del momento, encuentro en este instante de {state.get('chapter', 'reflexión')} una pausa necesaria. La ciudad respira a mi alrededor mientras yo busco {state.get('learning_goal', 'conexión')}. Hay algo en la manera en que la luz toca las superficies que me recuerda que cada instante es una oportunidad de conexión con lo esencial."
+            location_phrase = state.get('location', 'este lugar') if mention_place_name else "este rincón"
+            caption = (
+                f"En {location_phrase}, con {location_anchor}, la {state.get('emotion_focus', 'emoción')} "
+                f"se enreda con la luz del momento y me regala una pausa. "
+                f"Mientras busco {state.get('learning_goal', 'conexión')}, todo parece cotidiano y raro a la vez. "
+                "¿No te pasa que un detalle mínimo te cambia el día sin pedir permiso?"
+            )
         
         # Sanitizer de texto post-generación
         ps = (identity_meta.get("prompt_sanitizer", {}) or {})
@@ -259,11 +328,13 @@ def generate_image_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) 
     Returns:
         str: Prompt detallado para generación de imagen
     """
+    identity_meta = normalize_identity_metadata(identity_meta)
     logger.info(f"Generando image prompt para: {state.get('location')} / {state.get('emotion_focus')}")
     
     emotion = state.get("emotion_focus", "curiosidad")
     location = state.get("location", "ciudad")
     chapter = state.get("chapter", "despertar")
+    visual_decision = ((state.get("meta", {}) or {}).get("visual_decision", {}) or {})
     
     style_notes = identity_meta.get("style_notes", "fotografía natural")
     palette = identity_meta.get("palette", {})
@@ -301,6 +372,9 @@ def generate_image_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) 
     prompt = f"""portrait photograph, {style_notes}, 
 cinematic composition, {location}, {emotion_visual},
 {lighting_opt}, {color_desc}, depth of field,
+{visual_decision.get('shot_prompt', 'natural framing')},
+{visual_decision.get('pose_prompt', 'natural pose')},
+{visual_decision.get('scene_prompt', 'contextual environment')},
 intimate and contemplative mood, authentic moment,
 high quality, detailed, photorealistic, 8k"""
     
