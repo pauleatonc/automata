@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: influencer-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-influencer}
+      POSTGRES_USER: ${POSTGRES_USER:-influencer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-influencer} -d ${POSTGRES_DB:-influencer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - influencer-network
+
+  influencer-backend:
+    build: .
+    container_name: influencer-backend
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-influencer}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-influencer}
+      DATA_PATH: /data
+      IDENTITY_PACK_PATH: /identity_pack
+      TZ: ${TIMEZONE:-UTC}
+    volumes:
+      - app_data:/data
+      # Dejar rw para permitir actualización opcional del identity pack.
+      # Cambiar a :ro si quieres bloquear cualquier modificación.
+      - ./identity_pack:/identity_pack
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - influencer-network
+
+volumes:
+  postgres_data:
+  app_data:
+
+networks:
+  influencer-network:
+    driver: bridge
