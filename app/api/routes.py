@@ -2,8 +2,10 @@
 Rutas de la API FastAPI
 """
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any
+from pathlib import Path
 from app.db.session import get_db
 from app.models.post import Post
 from app.services.state_engine import get_current_state, next_state, load_identity_metadata
@@ -70,6 +72,23 @@ def get_latest_post(db: Session = Depends(get_db)) -> Dict[str, Any]:
             status_code=500,
             detail=f"Error al obtener post: {str(e)}"
         )
+
+
+@router.get("/files/images/{year}/{month}/{filename}")
+def serve_generated_image(year: str, month: str, filename: str):
+    """
+    Sirve imágenes generadas para uso por Instagram Graph API.
+    Debe ser accesible públicamente desde INSTAGRAM_GRAPH_PUBLIC_BASE_URL.
+    """
+    # Mitigar path traversal básico.
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nombre de archivo inválido")
+
+    image_path = Path(settings.DATA_PATH) / "images" / year / month / filename
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+
+    return FileResponse(path=str(image_path))
 
 
 @router.post("/generate/now")

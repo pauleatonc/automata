@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # Instagram (opcional)
     INSTAGRAM_USERNAME: Optional[str] = None
     INSTAGRAM_PASSWORD: Optional[str] = None
+    INSTAGRAM_GRAPH_ACCESS_TOKEN: Optional[str] = None
+    INSTAGRAM_GRAPH_IG_USER_ID: Optional[str] = None
+    INSTAGRAM_GRAPH_APP_ID: Optional[str] = None
+    INSTAGRAM_GRAPH_APP_SECRET: Optional[str] = None
+    INSTAGRAM_GRAPH_PUBLIC_BASE_URL: Optional[str] = None
+    INSTAGRAM_GRAPH_API_VERSION: str = "v21.0"
     PUBLISH_TO_INSTAGRAM: bool = False
     
     # Scheduler

@@ -9,19 +9,19 @@
   },
   "assets": {
     "reference_images": [
-      "identity_pack_01.png",
-      "identity_pack_02.png",
-      "identity_pack_03.png",
-      "identity_pack_04.png",
-      "identity_pack_05.png",
-      "identity_pack_06.png",
-      "identity_pack_07.png",
-      "identity_pack_08.png",
-      "identity_pack_09.png",
-      "identity_pack_10.png",
-      "identity_pack_12.png",
-      "identity_pack_13.png",
-      "identity_pack_14.png"
+      "optimized/identity_pack_01.jpg",
+      "optimized/identity_pack_02.jpg",
+      "optimized/identity_pack_03.jpg",
+      "optimized/identity_pack_04.jpg",
+      "optimized/identity_pack_05.jpg",
+      "optimized/identity_pack_06.jpg",
+      "optimized/identity_pack_07.jpg",
+      "optimized/identity_pack_08.jpg",
+      "optimized/identity_pack_09.jpg",
+      "optimized/identity_pack_10.jpg",
+      "optimized/identity_pack_12.jpg",
+      "optimized/identity_pack_13.jpg",
+      "optimized/identity_pack_14.jpg"
     ],
     "base_images": [
       "identity_pack_01.png",
