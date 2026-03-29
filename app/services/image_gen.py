@@ -204,39 +204,59 @@ def select_visual_decision(state: Dict[str, Any], identity_meta: Dict[str, Any])
     }
 
 
-def _sample_look(identity_meta: Dict[str, Any]) -> Dict[str, str]:
+def _pick_avoiding_recent(options: list, recent_values: list) -> str:
+    """Pick from options avoiding recently used values when possible."""
+    if not options:
+        return ""
+    available = [o for o in options if o not in recent_values]
+    pool = available if available else options
+    return random.choice(pool)
+
+
+def _sample_look(identity_meta: Dict[str, Any], recent_looks: Optional[list] = None) -> Dict[str, str]:
     """
-    Muestrea un look completo desde appearance_variation y look_rotation
+    Muestrea un look completo evitando repeticiones recientes.
     
     Args:
         identity_meta: Metadata del identity pack
+        recent_looks: Lista de looks recientes (dicts) para evitar repeticiones
         
     Returns:
         dict: Look muestreado con hair, palette, archetype, etc.
     """
     av = identity_meta.get("appearance_variation", {}) or {}
     lr = identity_meta.get("look_rotation", {}) or {}
+    window = int(lr.get("no_repeat_window", 7))
 
-    hair = _pick_from(av.get("hair_presets"))
+    recent = (recent_looks or [])[:window]
+    recent_hair = [lk.get("hair", "") for lk in recent if isinstance(lk, dict)]
+    recent_archetype = [lk.get("archetype", "") for lk in recent if isinstance(lk, dict)]
+    recent_palette = [lk.get("palette", "") for lk in recent if isinstance(lk, dict)]
+
+    hair = _pick_avoiding_recent(av.get("hair_presets", []), recent_hair)
+
     palettes = av.get("palettes", {})
-    palette_key = _pick_from(list(palettes.keys()))
+    recent_palette_keys = [lk.get("palette_key", "") for lk in recent if isinstance(lk, dict)]
+    palette_key = _pick_avoiding_recent(list(palettes.keys()), recent_palette_keys)
     palette_vals = palettes.get(palette_key, [])
     palette_desc = f"{palette_key}: " + ", ".join(palette_vals) if palette_vals else palette_key
 
-    archetype = _pick_from(av.get("outfit_archetypes"))
+    archetype = _pick_avoiding_recent(av.get("outfit_archetypes", []), recent_archetype)
     texture = _pick_from(av.get("textures"))
     accessory = _pick_from(av.get("accessories"))
 
     angles = (av.get("camera_lighting", {}) or {}).get("angles", [])
     lighting = (av.get("camera_lighting", {}) or {}).get("lighting", [])
+    recent_lighting = [lk.get("lighting", "") for lk in recent if isinstance(lk, dict)]
     angle = _pick_from(angles)
-    light = _pick_from(lighting)
+    light = _pick_avoiding_recent(lighting, recent_lighting)
 
     avoid = ", ".join(av.get("avoid", [])) if av.get("avoid") else ""
 
     return {
         "hair": hair or "",
         "palette": palette_desc or "",
+        "palette_key": palette_key or "",
         "archetype": archetype or "",
         "texture": texture or "",
         "accessory": accessory or "",
@@ -334,21 +354,16 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
     if pr.get("keywords"):
         boosts.append(pr["keywords"])
     
-    # Expression bias (siempre incluir para expresiones amables)
-    expression_bias = ig.get("expression_bias", [])
-    if expression_bias:
-        boosts.extend(expression_bias)
+    # Expression pool: pick 2 random expressions per image for variety
+    expression_pool = ig.get("expression_pool", ig.get("expression_bias", []))
+    if isinstance(expression_pool, list) and expression_pool:
+        k = min(2, len(expression_pool))
+        boosts.extend(random.sample(expression_pool, k))
     
-    # Wardrobe defaults
+    # Wardrobe defaults (safety constraints, always included)
     wardrobe_defaults = ig.get("wardrobe_defaults", [])
     if wardrobe_defaults:
         boosts.extend(wardrobe_defaults)
-    
-    # Lighting y framing desde generation_defaults
-    if gd.get("lighting_tags"):
-        boosts.append(gd["lighting_tags"])
-    if gd.get("framing_tags"):
-        boosts.append(gd["framing_tags"])
 
     # Mood controls dinámicos
     mood_controls = (identity_meta.get("mood_controls", {}) or {})
@@ -365,8 +380,9 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
     if not selected_visual:
         selected_visual = select_visual_decision(state, identity_meta)
 
-    # Muestrear look dinámico
-    look = _sample_look(identity_meta)
+    # Muestrear look dinámico con anti-repetición
+    recent_looks = state_meta.get("recent_looks", []) or []
+    look = _sample_look(identity_meta, recent_looks)
     
     # Construir prompt base con look dinámico
     base_quality_tags = ig.get(
@@ -417,6 +433,10 @@ def build_visual_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) ->
     if safe_suffix:
         visual_prompt += safe_suffix
     
+    # Persist selected look into state meta for anti-repetition tracking
+    if isinstance(state_meta, dict):
+        state_meta["look"] = look
+
     logger.info(f"Visual prompt construido: {emotion} / {location_cue} / look: {look['hair']} + {look['archetype']}")
     
     return visual_prompt
@@ -619,10 +639,10 @@ async def generate_image(
         
         # ---- NUEVA RAMA: Nano-Banana ----
         if "nano-banana" in replicate_model:
-            # Nano-Banana solo necesita prompt + image_input (lista)
             inputs = {
                 "prompt": visual_prompt,
-                "image_input": ref_inputs  # lista de URLs/data-urls
+                "image_input": ref_inputs,
+                "negative_prompt": negative_prompt,
             }
             output = client.run(replicate_model, input=inputs)
 

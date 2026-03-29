@@ -3,6 +3,7 @@ Motor de estado - Gestiona la evolución narrativa del influencer
 """
 import json
 import os
+import random
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.post import Post
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.services.text_gen import generate_caption, generate_image_prompt
+from app.services.text_gen import generate_caption
 from app.services.image_gen import generate_image, select_visual_decision
 from app.services.identity_metadata_adapter import normalize_identity_metadata
 from app.services.publish_instagram import instagram_publisher
@@ -171,7 +172,7 @@ def next_state(
     else:
         new_state["chapter"] = _evolve_chapter_by_days(days_elapsed, identity_meta)
     
-    # 2. EVOLUCIÓN DE EMOCIÓN (ciclo de 9 emociones)
+    # 2. EVOLUCIÓN DE EMOCIÓN (aleatoria ponderada, evita repeticiones)
     if force_emotion:
         new_state["emotion_focus"] = force_emotion
         logger.info(f"Emoción forzada por env: {force_emotion}")
@@ -179,9 +180,11 @@ def next_state(
         new_state["emotion_focus"] = feedback["emotion"]
         logger.info(f"Emoción forzada por feedback: {feedback['emotion']}")
     else:
+        recent_emotions = meta.get("recent_emotions", []) or []
         new_state["emotion_focus"] = _evolve_emotion(
             prev_state.get("emotion_focus", "curiosidad"),
-            identity_meta
+            identity_meta,
+            recent_emotions,
         )
     
     # 3. EVOLUCIÓN DE UBICACIÓN (arco narrativo geográfico)
@@ -202,12 +205,17 @@ def next_state(
     new_state["learning_goal"] = _evolve_learning_goal(new_state["chapter"], identity_meta)
     
     # 5. ACTUALIZAR META
+    recent_emotions = (meta.get("recent_emotions", []) or [])[:4]
+    recent_emotions.insert(0, new_state["emotion_focus"])
+    recent_emotions = recent_emotions[:5]
+
     new_state["meta"] = {
         **meta,
         "post_count": post_count,
         "days_elapsed": days_elapsed,
         "last_evolution": datetime.now().isoformat(),
-        "feedback_applied": bool(feedback)
+        "feedback_applied": bool(feedback),
+        "recent_emotions": recent_emotions,
     }
     
     logger.info(f"Nuevo estado: {new_state['chapter']} / {new_state['emotion_focus']} / {new_state['location']}")
@@ -256,19 +264,23 @@ def _evolve_chapter_by_days(days_elapsed: int, identity_meta: Optional[Dict[str,
     return "integración"
 
 
-def _evolve_emotion(current_emotion: str, identity_meta: Optional[Dict[str, Any]] = None) -> str:
+def _evolve_emotion(
+    current_emotion: str,
+    identity_meta: Optional[Dict[str, Any]] = None,
+    recent_emotions: Optional[List[str]] = None,
+) -> str:
     """
-    Rotación de emociones en ciclo de 9
+    Selecciona la siguiente emoción con aleatoriedad ponderada.
     
-    Ciclo emocional:
-    curiosidad → asombro → confusión → empatía → ternura → 
-    soledad → memoria → aceptación → libertad → (ciclo)
+    Emociones recientes reciben peso reducido para evitar repeticiones.
+    La emoción actual siempre se penaliza para forzar cambio.
     
     Args:
         current_emotion: Emoción actual
+        recent_emotions: Emociones de los últimos N posts
         
     Returns:
-        str: Siguiente emoción en el ciclo
+        str: Siguiente emoción seleccionada
     """
     narrative = ((identity_meta or {}).get("narrative", {}) or {})
     emotion_cycle = narrative.get("emotion_cycle", []) or [
@@ -283,17 +295,24 @@ def _evolve_emotion(current_emotion: str, identity_meta: Optional[Dict[str, Any]
         "libertad"
     ]
     
-    try:
-        current_index = emotion_cycle.index(current_emotion)
-        # Avanzar a la siguiente emoción (con ciclo)
-        next_index = (current_index + 1) % len(emotion_cycle)
-        next_emotion = emotion_cycle[next_index]
-        logger.debug(f"Emoción: {current_emotion} → {next_emotion}")
-        return next_emotion
-    except ValueError:
-        # Si la emoción actual no está en el ciclo, empezar desde el inicio
-        logger.warning(f"Emoción '{current_emotion}' no en ciclo, reiniciando desde curiosidad")
-        return emotion_cycle[0]
+    if len(emotion_cycle) <= 1:
+        return emotion_cycle[0] if emotion_cycle else "curiosidad"
+
+    recent = set(recent_emotions or [])
+    recent.add(current_emotion)
+
+    weights = []
+    for e in emotion_cycle:
+        if e == current_emotion:
+            weights.append(0.05)
+        elif e in recent:
+            weights.append(0.3)
+        else:
+            weights.append(1.0)
+
+    next_emotion = random.choices(emotion_cycle, weights=weights, k=1)[0]
+    logger.debug(f"Emoción: {current_emotion} → {next_emotion} (ponderada)")
+    return next_emotion
 
 
 def _evolve_location_by_arc(
@@ -538,19 +557,27 @@ class StateEngine:
                 if isinstance(prev_decision, dict):
                     recent_visual_decisions.append(prev_decision)
 
+            recent_looks = []
+            for prev in recent_context:
+                prev_meta = (prev.get("meta", {}) or {})
+                prev_look = prev_meta.get("look")
+                if isinstance(prev_look, dict):
+                    recent_looks.append(prev_look)
+
             runtime_state = dict(new_state)
             runtime_meta = dict(new_state.get("meta", {}) or {})
             runtime_meta["recent_visual_decisions"] = recent_visual_decisions
+            runtime_meta["recent_looks"] = recent_looks
             runtime_state["meta"] = runtime_meta
 
             selected_visual = select_visual_decision(runtime_state, identity_meta)
             runtime_meta["visual_decision"] = selected_visual
             runtime_state["meta"] = runtime_meta
 
-            # Persistir solo la decisión aplicada (no toda la ventana histórica)
+            # Persistir decisión visual y look reciente para anti-repetición
             new_state["meta"] = {
                 **(new_state.get("meta", {}) or {}),
-                "visual_decision": selected_visual
+                "visual_decision": selected_visual,
             }
             logger.info(
                 "Dirección visual: shot=%s pose=%s scene=%s",
@@ -564,30 +591,30 @@ class StateEngine:
             caption = generate_caption(runtime_state, identity_meta, recent_context)
             logger.info(f"Caption generado: {len(caption)} caracteres")
             
-            # 6. Generar prompt de imagen
-            logger.info("Paso 6/8: Generando prompt de imagen...")
-            image_prompt = generate_image_prompt(runtime_state, identity_meta)
-            logger.info(f"Image prompt: {image_prompt[:100]}...")
-            
-            # 7. Generar imagen
-            logger.info("Paso 7/8: Generando imagen con Replicate...")
+            # 6. Generar imagen (build_visual_prompt se ejecuta internamente)
+            logger.info("Paso 6/7: Generando imagen con Replicate...")
             image_path, source_image_url = await generate_image(
-                prompt=image_prompt,
+                prompt="",
                 state=runtime_state,
                 identity_meta=identity_meta,
                 model="Nano-banana"
             )
             logger.info(f"Imagen generada: {image_path}")
+
+            # Persist look from runtime meta into new_state for DB storage
+            generated_look = runtime_meta.get("look")
+            if generated_look:
+                new_state["meta"] = {**(new_state.get("meta", {}) or {}), "look": generated_look}
             
-            # 8. Guardar en base de datos
-            logger.info("Paso 8/8: Guardando en base de datos...")
+            # 7. Guardar en base de datos
+            logger.info("Paso 7/7: Guardando en base de datos...")
             new_post = Post(
                 chapter=new_state.get("chapter"),
                 emotion_focus=new_state.get("emotion_focus"),
                 learning_goal=new_state.get("learning_goal"),
                 location=new_state.get("location"),
                 caption=caption,
-                image_prompt=image_prompt,
+                image_prompt="(built internally by build_visual_prompt)",
                 image_path=image_path,
                 published_platforms={},
                 meta=new_state.get("meta", {})
@@ -612,9 +639,21 @@ class StateEngine:
                     )
                     
                     if media_id:
-                        new_post.published_platforms = {"instagram": media_id}
-                        db.commit()
+                        platforms = {"instagram": media_id}
                         logger.info(f"✅ Publicado en Instagram: {media_id}")
+
+                        # Compartir a Stories después de publicar el post
+                        story_id = instagram_publisher.publish_story(
+                            image_path, source_image_url=source_image_url
+                        )
+                        if story_id:
+                            platforms["instagram_story"] = story_id
+                            logger.info(f"✅ Story publicada: {story_id}")
+                        else:
+                            logger.warning("⚠️ Fallo al publicar Story")
+
+                        new_post.published_platforms = platforms
+                        db.commit()
                     else:
                         logger.warning("⚠️ Fallo al publicar en Instagram")
                 except Exception as e:

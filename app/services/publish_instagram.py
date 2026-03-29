@@ -249,6 +249,90 @@ class InstagramPublisher:
             
             return None
     
+    def publish_story(
+        self,
+        image_path: str,
+        source_image_url: Optional[str] = None,
+        retry_count: int = 0,
+    ) -> Optional[str]:
+        """
+        Publica una imagen como Story en Instagram.
+
+        Args:
+            image_path: Ruta local a la imagen (para verificar existencia).
+            source_image_url: URL pública de la imagen (CDN preferida).
+            retry_count: Contador interno de reintentos.
+
+        Returns:
+            Optional[str]: Media ID de la story publicada, o None si falla.
+        """
+        if not self.enabled:
+            return None
+        self._clear_error()
+
+        if not self.login():
+            return None
+
+        try:
+            if not os.path.exists(image_path):
+                raise FileNotFoundError(f"Imagen no encontrada: {image_path}")
+
+            if source_image_url:
+                image_url = source_image_url
+            else:
+                image_url = self._image_url_for_graph(image_path)
+                if not image_url:
+                    logger.error("No se pudo construir image_url para Story.")
+                    return None
+
+            logger.info(f"Publicando Story en Instagram: {image_url[:80]}...")
+
+            # 1) Crear contenedor de story
+            media_resp = self._graph_post(
+                f"/{self.ig_user_id}/media",
+                data={
+                    "image_url": image_url,
+                    "media_type": "STORIES",
+                },
+            )
+            creation_id = media_resp.get("id")
+            if not creation_id:
+                raise RuntimeError(f"Respuesta sin creation_id: {media_resp}")
+
+            # 2) Publicar contenedor
+            publish_resp = self._graph_post(
+                f"/{self.ig_user_id}/media_publish",
+                data={"creation_id": creation_id},
+            )
+            media_id = str(publish_resp.get("id", ""))
+            if not media_id:
+                raise RuntimeError(f"Respuesta de publicación inválida: {publish_resp}")
+
+            logger.info(f"✅ Story publicada en Instagram: {media_id}")
+            return media_id
+
+        except httpx.HTTPStatusError as e:
+            body = e.response.text if e.response is not None else str(e)
+            logger.error(f"Graph API Story error ({e.response.status_code}): {body}")
+            if e.response is not None and e.response.status_code in (429, 500, 502, 503, 504):
+                self._set_error("instagram_graph_story_transient", body)
+                if retry_count < self.max_retries:
+                    wait_time = self._compute_backoff(retry_count)
+                    logger.info(f"Reintentando Story en {wait_time}s ({retry_count + 1}/{self.max_retries})")
+                    time.sleep(wait_time)
+                    return self.publish_story(image_path, source_image_url, retry_count + 1)
+            else:
+                self._set_error("instagram_graph_story_http_error", body)
+            return None
+
+        except Exception as e:
+            logger.error(f"Error al publicar Story: {str(e)}")
+            self._set_error("instagram_graph_story_error", str(e))
+            if retry_count < self.max_retries:
+                time.sleep(self._compute_backoff(retry_count))
+                return self.publish_story(image_path, source_image_url, retry_count + 1)
+            return None
+
     def is_enabled(self) -> bool:
         """Verifica si el servicio está habilitado"""
         return self.enabled

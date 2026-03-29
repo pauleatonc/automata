@@ -9,7 +9,7 @@ from pathlib import Path
 from app.db.session import get_db
 from app.models.post import Post
 from app.services.state_engine import get_current_state, next_state, load_identity_metadata
-from app.services.text_gen import generate_caption, generate_image_prompt
+from app.services.text_gen import generate_caption
 from app.services.image_gen import generate_image, load_identity_config
 from app.services.publish_instagram import instagram_publisher
 from app.core.config import settings
@@ -164,13 +164,10 @@ async def generate_now(
         caption = generate_caption(new_state, identity_meta)
         logger.info(f"Caption generado: {len(caption.split())} palabras")
         
-        # 5. Generar imagen
+        # 5. Generar imagen (build_visual_prompt se ejecuta internamente)
         logger.info("Paso 5/6: Generando imagen con Replicate...")
-        image_prompt = generate_image_prompt(new_state, identity_meta)
-        logger.info(f"Image prompt: {image_prompt[:100]}...")
-        
         image_path, source_image_url = await generate_image(
-            prompt=image_prompt,
+            prompt="",
             state=new_state,
             identity_meta=identity_meta,
             model="Nano-banana"
@@ -185,7 +182,7 @@ async def generate_now(
             learning_goal=new_state.get("learning_goal"),
             location=new_state.get("location"),
             caption=caption,
-            image_prompt=image_prompt,
+            image_prompt="(built internally by build_visual_prompt)",
             image_path=image_path,
             published_platforms={},
             meta=new_state.get("meta", {})
@@ -205,9 +202,20 @@ async def generate_now(
             )
             
             if media_id:
-                new_post.published_platforms = {"instagram": media_id}
-                db.commit()
+                platforms = {"instagram": media_id}
                 logger.info(f"📱 Publicado en Instagram: {media_id}")
+
+                story_id = instagram_publisher.publish_story(
+                    image_path, source_image_url=source_image_url
+                )
+                if story_id:
+                    platforms["instagram_story"] = story_id
+                    logger.info(f"📱 Story publicada: {story_id}")
+                else:
+                    logger.warning("Fallo al publicar Story")
+
+                new_post.published_platforms = platforms
+                db.commit()
             else:
                 logger.warning("Fallo al publicar en Instagram")
         

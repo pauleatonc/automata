@@ -80,7 +80,7 @@
       }
     },
     "guidelines": {
-      "length": "50-80 palabras",
+      "length": "50-200 palabras",
       "style": [
         "intimo",
         "contemplativo",
@@ -105,6 +105,16 @@
       ],
       "emoji_policy": "0-1 emoji opcional; nunca como remate principal"
     },
+    "tone_variations": [
+      "introspectiva y melancólica",
+      "irónica y observadora",
+      "entusiasta descubriendo algo nuevo",
+      "nostálgica recordando otro lugar",
+      "filosófica cuestionando lo cotidiano",
+      "juguetona y ligera",
+      "vulnerable y honesta",
+      "descriptiva como cronista urbana"
+    ],
     "prompt_sanitizer": {
       "ban_phrases": [
         "desde la hondura del ser",
@@ -167,7 +177,7 @@
       {
         "name": "Chile urbano inicial",
         "min_days": 0,
-        "max_days": 15,
+        "max_days": 5,
         "locations": [
           "Santiago, Barrio Lastarria",
           "Santiago, Cerro San Cristóbal",
@@ -176,8 +186,8 @@
       },
       {
         "name": "Costa central Chile",
-        "min_days": 15,
-        "max_days": 30,
+        "min_days": 5,
+        "max_days": 11,
         "locations": [
           "Valparaíso",
           "Viña del Mar",
@@ -186,8 +196,8 @@
       },
       {
         "name": "Sur de Chile",
-        "min_days": 30,
-        "max_days": 45,
+        "min_days": 11,
+        "max_days": 17,
         "locations": [
           "Puerto Varas",
           "Chiloé",
@@ -196,8 +206,8 @@
       },
       {
         "name": "Patagonia",
-        "min_days": 45,
-        "max_days": 60,
+        "min_days": 17,
+        "max_days": 23,
         "locations": [
           "Patagonia chilena",
           "Torres del Paine",
@@ -206,8 +216,8 @@
       },
       {
         "name": "Austral extendido",
-        "min_days": 60,
-        "max_days": 75,
+        "min_days": 23,
+        "max_days": 29,
         "locations": [
           "El Calafate",
           "Ushuaia",
@@ -216,8 +226,8 @@
       },
       {
         "name": "Cono sur urbano",
-        "min_days": 75,
-        "max_days": 90,
+        "min_days": 29,
+        "max_days": 36,
         "locations": [
           "Buenos Aires, Palermo",
           "Buenos Aires, San Telmo",
@@ -225,9 +235,9 @@
         ]
       },
       {
-        "name": "Colombia caribe y andina",
-        "min_days": 90,
-        "max_days": 110,
+        "name": "Colombia andina",
+        "min_days": 36,
+        "max_days": 43,
         "locations": [
           "Bogotá, La Candelaria",
           "Medellín, Comuna 13",
@@ -236,8 +246,8 @@
       },
       {
         "name": "Caribe colombiano profundo",
-        "min_days": 110,
-        "max_days": 130,
+        "min_days": 43,
+        "max_days": 50,
         "locations": [
           "La Guajira",
           "Mompós",
@@ -248,8 +258,8 @@
       },
       {
         "name": "México",
-        "min_days": 130,
-        "max_days": 145,
+        "min_days": 50,
+        "max_days": 57,
         "locations": [
           "Ciudad de México, Roma Norte",
           "Ciudad de México, Coyoacán",
@@ -258,8 +268,8 @@
       },
       {
         "name": "Japón",
-        "min_days": 145,
-        "max_days": 160,
+        "min_days": 57,
+        "max_days": 64,
         "locations": [
           "Tokio, Shibuya",
           "Tokio, Shinjuku",
@@ -268,8 +278,8 @@
       },
       {
         "name": "Europa",
-        "min_days": 160,
-        "max_days": 180,
+        "min_days": 64,
+        "max_days": 71,
         "locations": [
           "Londres, Shoreditch",
           "Berlín, Kreuzberg",
@@ -278,7 +288,7 @@
       },
       {
         "name": "Asia urbana avanzada",
-        "min_days": 180,
+        "min_days": 71,
         "max_days": null,
         "locations": [
           "Seúl, Gangnam",
@@ -293,11 +303,22 @@
     "style_strength": 0.55,
     "prompt_guidelines": {
       "identity_anchor": "usar reference_images del identity pack",
-      "expression_bias": [
+      "expression_pool": [
         "smile",
         "gentle warm gaze",
         "friendly eye contact",
-        "relaxed jaw"
+        "relaxed jaw",
+        "pensive look, eyes slightly narrowed",
+        "laughing candidly",
+        "serious contemplative gaze",
+        "looking away thoughtfully",
+        "eyes closed, peaceful expression",
+        "subtle smirk",
+        "surprised soft expression",
+        "looking down at hands",
+        "gazing at the horizon",
+        "mid-conversation expression",
+        "biting lip in thought"
       ],
       "wardrobe_defaults": [
         "modern minimalist outfit",
@@ -663,8 +684,8 @@
         "face_detection_input_height": 640,
         "num_outputs": 1
       },
-      "framing_tags": "close portrait, head-and-shoulders, minimal background",
-      "lighting_tags": "natural daylight, golden hour, soft bounce light, soft shadows"
+      "framing_tags": "",
+      "lighting_tags": ""
     },
     "photorealism": {
       "keywords": "photorealistic, realistic skin pores, natural color grading, subtle film grain, micro-contrast, clean highlights, natural catchlights in eyes",
@@ -696,16 +717,24 @@
     "composition_policy": {
       "no_repeat_window": 4,
       "shot_weights": {
-        "portrait_close": 0.4,
-        "half_body": 0.35,
-        "full_body": 0.25
+        "portrait_close": 0.20,
+        "half_body": 0.25,
+        "full_body": 0.20,
+        "environmental_wide": 0.15,
+        "over_shoulder": 0.10,
+        "from_behind": 0.10
       },
       "pose_weights": {
-        "standing": 0.35,
-        "walking": 0.25,
-        "sitting": 0.15,
-        "candid": 0.15,
-        "dynamic": 0.1
+        "standing": 0.12,
+        "walking": 0.12,
+        "sitting": 0.12,
+        "candid": 0.12,
+        "dynamic": 0.10,
+        "leaning": 0.10,
+        "crouching": 0.08,
+        "looking_back": 0.08,
+        "hands_in_pockets": 0.08,
+        "stretching": 0.08
       },
       "scene_weights": {
         "urban": 0.4,
@@ -717,14 +746,22 @@
       "shot_prompt_map": {
         "portrait_close": "head-and-shoulders framing, portrait emphasis, 85mm portrait feel",
         "half_body": "half-body framing, natural posture, subject-context balance",
-        "full_body": "full-body framing, subject fully visible, spatial context around subject"
+        "full_body": "full-body framing, subject fully visible, spatial context around subject",
+        "environmental_wide": "wide environmental shot, subject small in frame, landscape dominates",
+        "over_shoulder": "over-the-shoulder perspective, voyeuristic intimate angle",
+        "from_behind": "shot from behind, subject facing away, contemplating the scene"
       },
       "pose_prompt_map": {
         "standing": "standing pose, relaxed shoulders, natural confidence",
         "walking": "walking pose, subtle motion, candid urban-natural rhythm",
         "sitting": "seated pose, grounded posture, calm contemplative gesture",
         "candid": "candid pose, unposed feeling, spontaneous micro-gesture",
-        "dynamic": "dynamic pose, expressive body language, energetic yet elegant"
+        "dynamic": "dynamic pose, expressive body language, energetic yet elegant",
+        "leaning": "leaning against wall or railing, relaxed weight shift",
+        "crouching": "crouching down, looking up at camera, playful perspective",
+        "looking_back": "looking back over shoulder while walking away",
+        "hands_in_pockets": "hands in pockets, casual confident stance, easy posture",
+        "stretching": "stretching arms or body, relaxed morning energy, organic movement"
       },
       "emotion_overrides": {
         "libertad": {

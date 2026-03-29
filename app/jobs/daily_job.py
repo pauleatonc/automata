@@ -29,6 +29,8 @@ async def generate_daily_post():
             logger.info(f"✅ Post generado exitosamente: ID {post.id}")
             if post.published_platforms and "instagram" in post.published_platforms:
                 logger.info(f"📱 Publicado en Instagram: {post.published_platforms['instagram']}")
+            if post.published_platforms and "instagram_story" in post.published_platforms:
+                logger.info(f"📱 Story publicada en Instagram: {post.published_platforms['instagram_story']}")
         else:
             logger.error(f"❌ Error al generar post: {error}")
             

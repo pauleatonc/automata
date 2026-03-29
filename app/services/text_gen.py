@@ -107,8 +107,10 @@ def generate_caption(state: Dict[str, Any], identity_meta: Dict[str, Any], recen
     emoji_policy = cap_rules.get("emoji_policy", "0–1 emoji opcional; nunca como remate principal")
     humor_profile = ((identity_meta.get("persona", {}) or {}).get("personality", {}) or {}).get("humor_profile", {}) or {}
     
-    # Obtener tema del día (basado en día del año)
+    # Obtener tema aleatorio y tono narrativo
     daily_theme = _get_daily_theme()
+    tone_variations = identity_meta.get("tone_variations", [])
+    chosen_tone = random.choice(tone_variations) if tone_variations else ""
     
     # Construir contexto de posts recientes
     context_text = ""
@@ -145,7 +147,8 @@ REFERENCIAS ESTÉTICAS:
 INSTRUCCIONES ESPECÍFICAS:
 - Longitud: 50–80 palabras
 - Idioma: español
-- Tono: poético, íntimo, reflexivo, con humor seco sutil (no solemne)
+- Tono narrativo para este post: {chosen_tone if chosen_tone else "poético, íntimo, reflexivo"}
+- Base tonal: humor seco sutil (no solemne)
 - Perspectiva: primera persona
 - NO incluir hashtags
 - Debe incluir: 1 micro-escena concreta (objeto/gesto/lugar) + 1 línea de observación irónica o autoirónica (máx. 1 línea) + 1 pregunta abierta sin moraleja
@@ -173,7 +176,7 @@ Usa imágenes sensoriales y metáforas sutiles."""
             messages=[
                 {
                     "role": "system",
-                    "content": "Eres una escritora íntima con humor seco (deadpan) y una ironía amable. Poética pero nada solemne. Evitas grandilocuencias y clichés. SIEMPRE: (a) un detalle cotidiano concreto, (b) UNA línea irónica/autoirónica breve, (c) cierras con una pregunta abierta sin moraleja. 0–1 emoji máximo y nunca como remate."
+                    "content": f"Eres una escritora íntima con humor seco (deadpan) y una ironía amable. Poética pero nada solemne. Evitas grandilocuencias y clichés. SIEMPRE: (a) un detalle cotidiano concreto, (b) UNA línea irónica/autoirónica breve, (c) cierras con una pregunta abierta sin moraleja. 0–1 emoji máximo y nunca como remate.{' En este post, adopta un tono ' + chosen_tone + '.' if chosen_tone else ''}"
                 },
                 {
                     "role": "user",
@@ -207,7 +210,7 @@ Usa imágenes sensoriales y metáforas sutiles."""
                     messages=[
                         {
                             "role": "system",
-                            "content": "Eres una escritora íntima con humor seco (deadpan) y una ironía amable. Poética pero nada solemne. Evitas grandilocuencias y clichés. SIEMPRE: (a) un detalle cotidiano concreto, (b) UNA línea irónica/autoirónica breve, (c) cierras con una pregunta abierta sin moraleja. 0–1 emoji máximo y nunca como remate. SIEMPRE responde con texto, nunca con listas o formato especial."
+                            "content": f"Eres una escritora íntima con humor seco (deadpan) y una ironía amable. Poética pero nada solemne. Evitas grandilocuencias y clichés. SIEMPRE: (a) un detalle cotidiano concreto, (b) UNA línea irónica/autoirónica breve, (c) cierras con una pregunta abierta sin moraleja. 0–1 emoji máximo y nunca como remate. SIEMPRE responde con texto, nunca con listas o formato especial.{' En este post, adopta un tono ' + chosen_tone + '.' if chosen_tone else ''}"
                         },
                         {
                             "role": "user",
@@ -274,10 +277,7 @@ Usa imágenes sensoriales y metáforas sutiles."""
 
 def _get_daily_theme() -> str:
     """
-    Obtiene el tema del día basado en ciclo mensual
-    
-    Returns:
-        str: Tema sugerido para el día
+    Selecciona un tema aleatorio por post para maximizar variedad.
     """
     themes = [
         "luz y sombra",
@@ -311,12 +311,7 @@ def _get_daily_theme() -> str:
         "lugares de paso",
         "la música del mundo"
     ]
-    
-    # Usar día del mes para consistencia
-    day_of_month = datetime.now().day
-    theme_index = (day_of_month - 1) % len(themes)
-    
-    return themes[theme_index]
+    return random.choice(themes)
 
 
 def generate_image_prompt(state: Dict[str, Any], identity_meta: Dict[str, Any]) -> str:
