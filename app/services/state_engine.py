@@ -571,7 +571,7 @@ class StateEngine:
             
             # 7. Generar imagen
             logger.info("Paso 7/8: Generando imagen con Replicate...")
-            image_path = await generate_image(
+            image_path, source_image_url = await generate_image(
                 prompt=image_prompt,
                 state=runtime_state,
                 identity_meta=identity_meta,
@@ -607,7 +607,9 @@ class StateEngine:
             if publish_to_instagram and instagram_publisher.is_enabled():
                 logger.info("📱 Publicando en Instagram...")
                 try:
-                    media_id = instagram_publisher.publish_post(image_path, caption)
+                    media_id = instagram_publisher.publish_post(
+                        image_path, caption, source_image_url=source_image_url
+                    )
                     
                     if media_id:
                         new_post.published_platforms = {"instagram": media_id}

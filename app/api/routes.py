@@ -19,6 +19,29 @@ import os
 logger = get_logger(__name__)
 router = APIRouter()
 
+_MAGIC_SIGNATURES = [
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"RIFF", "image/webp"),  # RIFF....WEBP
+]
+
+
+def _detect_image_media_type(path: Path) -> str:
+    """Detect actual image MIME type from file magic bytes."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+        for magic, mime in _MAGIC_SIGNATURES:
+            if header.startswith(magic):
+                return mime
+        if header[4:8] == b"WEBP":
+            return "image/webp"
+    except OSError:
+        pass
+    return "application/octet-stream"
+
 
 @router.get("/health")
 def health_check() -> Dict[str, str]:
@@ -75,12 +98,12 @@ def get_latest_post(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 
 @router.get("/files/images/{year}/{month}/{filename}")
+@router.head("/files/images/{year}/{month}/{filename}")
 def serve_generated_image(year: str, month: str, filename: str):
     """
     Sirve imágenes generadas para uso por Instagram Graph API.
     Debe ser accesible públicamente desde INSTAGRAM_GRAPH_PUBLIC_BASE_URL.
     """
-    # Mitigar path traversal básico.
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Nombre de archivo inválido")
 
@@ -88,7 +111,8 @@ def serve_generated_image(year: str, month: str, filename: str):
     if not image_path.exists() or not image_path.is_file():
         raise HTTPException(status_code=404, detail="Imagen no encontrada")
 
-    return FileResponse(path=str(image_path))
+    media_type = _detect_image_media_type(image_path)
+    return FileResponse(path=str(image_path), media_type=media_type)
 
 
 @router.post("/generate/now")
@@ -145,7 +169,7 @@ async def generate_now(
         image_prompt = generate_image_prompt(new_state, identity_meta)
         logger.info(f"Image prompt: {image_prompt[:100]}...")
         
-        image_path = await generate_image(
+        image_path, source_image_url = await generate_image(
             prompt=image_prompt,
             state=new_state,
             identity_meta=identity_meta,
@@ -176,7 +200,9 @@ async def generate_now(
         # 7. Publicar en Instagram (opcional)
         if publish and instagram_publisher.is_enabled():
             logger.info("Publicando en Instagram...")
-            media_id = instagram_publisher.publish_post(image_path, caption)
+            media_id = instagram_publisher.publish_post(
+                image_path, caption, source_image_url=source_image_url
+            )
             
             if media_id:
                 new_post.published_platforms = {"instagram": media_id}

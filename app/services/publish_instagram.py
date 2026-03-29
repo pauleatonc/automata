@@ -158,7 +158,8 @@ class InstagramPublisher:
         self,
         image_path: str,
         caption: str,
-        retry_count: int = 0
+        retry_count: int = 0,
+        source_image_url: Optional[str] = None,
     ) -> Optional[str]:
         """
         Publica un post en Instagram con retry básico
@@ -167,6 +168,8 @@ class InstagramPublisher:
             image_path: Ruta a la imagen a publicar
             caption: Caption del post
             retry_count: Contador interno de reintentos
+            source_image_url: URL original de la imagen (CDN del generador),
+                              preferida sobre la URL self-hosted si está disponible.
             
         Returns:
             Optional[str]: Media ID del post publicado o None si falla
@@ -177,21 +180,24 @@ class InstagramPublisher:
             return None
         self._clear_error()
         
-        # Asegurar contexto Graph API válido
         if not self.login():
             return None
         
         try:
-            # Verificar que la imagen existe
             if not os.path.exists(image_path):
                 raise FileNotFoundError(f"Imagen no encontrada: {image_path}")
 
-            image_url = self._image_url_for_graph(image_path)
-            if not image_url:
-                logger.error("No se pudo construir image_url pública para Graph API.")
-                return None
+            if source_image_url:
+                image_url = source_image_url
+                logger.info("Usando URL fuente (CDN del generador) para Graph API")
+            else:
+                image_url = self._image_url_for_graph(image_path)
+                if not image_url:
+                    logger.error("No se pudo construir image_url pública para Graph API.")
+                    return None
 
             logger.info(f"Publicando en Instagram Graph API: {os.path.basename(image_path)}")
+            logger.info(f"Image URL para Graph API: {image_url}")
             logger.info(f"Caption: {caption[:50]}...")
 
             # 1) Crear contenedor de media
@@ -228,7 +234,7 @@ class InstagramPublisher:
                     wait_time = self._compute_backoff(retry_count)
                     logger.info(f"Reintentando Graph API en {wait_time}s ({retry_count + 1}/{self.max_retries})")
                     time.sleep(wait_time)
-                    return self.publish_post(image_path, caption, retry_count + 1)
+                    return self.publish_post(image_path, caption, retry_count + 1, source_image_url=source_image_url)
             else:
                 self._set_error("instagram_graph_http_error", body)
             return None
@@ -239,7 +245,7 @@ class InstagramPublisher:
             if retry_count < self.max_retries:
                 logger.info(f"Reintentando... ({retry_count + 1}/{self.max_retries})")
                 time.sleep(self._compute_backoff(retry_count))
-                return self.publish_post(image_path, caption, retry_count + 1)
+                return self.publish_post(image_path, caption, retry_count + 1, source_image_url=source_image_url)
             
             return None
     

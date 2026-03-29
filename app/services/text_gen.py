@@ -224,13 +224,15 @@ Usa imágenes sensoriales y metáforas sutiles."""
                 caption = ""
 
         if not caption:
-            # Fallback: generar caption básico
             logger.warning("Generando caption de fallback")
             location_phrase = state.get('location', 'este lugar') if mention_place_name else "este rincón"
+            emotion_word = state.get('emotion_focus', 'emoción')
             caption = (
-                f"En {location_phrase}, con {location_anchor}, la {state.get('emotion_focus', 'emoción')} "
-                f"se enreda con la luz del momento y me regala una pausa. "
-                f"Mientras busco {state.get('learning_goal', 'conexión')}, todo parece cotidiano y raro a la vez. "
+                f"Hay algo en {location_phrase} que me detiene hoy. "
+                f"Quizás es esta {emotion_word} que aparece sin avisar, "
+                f"mezclada con la luz de la tarde y el ruido de fondo. "
+                f"Sigo buscando {state.get('learning_goal', 'algo que no sé nombrar')}, "
+                "y mientras tanto, todo parece cotidiano y raro a la vez. "
                 "¿No te pasa que un detalle mínimo te cambia el día sin pedir permiso?"
             )
         

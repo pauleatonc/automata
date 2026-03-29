@@ -677,22 +677,37 @@ async def generate_image(
                     logger.error(f"No se pudo obtener schema: {e2}")
                 raise
         
-        # Obtener URL de imagen generada con helper robusto
         image_url = _first_image_url_from_output(output)
         if not image_url:
             raise Exception(f"Salida no reconocida del modelo: {type(output)}")
         logger.info(f"Imagen generada: {str(image_url)[:80]}...")
         
-        # Descargar y guardar imagen con estructura de fecha
         local_path = await save_generated_image(image_url)
         
         logger.info(f"Imagen guardada en: {local_path}")
         
-        return local_path
+        return local_path, image_url
         
     except Exception as e:
         logger.error(f"Error al generar imagen: {str(e)}")
         raise Exception(f"Error en generación de imagen: {str(e)}")
+
+
+def _detect_extension(content: bytes, content_type: str = "") -> str:
+    """Detect image file extension from magic bytes, falling back to Content-Type."""
+    if content[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return ".webp"
+    ct = content_type.lower().split(";")[0].strip()
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(ct, ".jpg")
 
 
 async def save_generated_image(image_url: str) -> str:
@@ -706,7 +721,6 @@ async def save_generated_image(image_url: str) -> str:
         str: Ruta local donde se guardó la imagen
     """
     try:
-        # Crear estructura de carpetas: images/YYYY/MM/
         now = datetime.now()
         year = now.strftime("%Y")
         month = now.strftime("%m")
@@ -715,27 +729,26 @@ async def save_generated_image(image_url: str) -> str:
         images_dir = Path(settings.DATA_PATH) / "images" / year / month
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # Nombre de archivo: DD.png
-        filename = f"{day}.png"
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.get(image_url)
+            response.raise_for_status()
+            content = response.content
+
+        ext = _detect_extension(content, response.headers.get("content-type", ""))
+
+        filename = f"{day}{ext}"
         filepath = images_dir / filename
         
-        # Si ya existe ese día, agregar timestamp
         if filepath.exists():
             timestamp = now.strftime("%H%M%S")
-            filename = f"{day}_{timestamp}.png"
+            filename = f"{day}_{timestamp}{ext}"
             filepath = images_dir / filename
             logger.info(f"Archivo del día ya existe, usando timestamp: {filename}")
         
         logger.info(f"Descargando imagen a: {filepath}")
         
-        # Descargar imagen
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.get(image_url)
-            response.raise_for_status()
-            
-            # Guardar imagen como PNG
-            with open(filepath, 'wb') as f:
-                f.write(response.content)
+        with open(filepath, 'wb') as f:
+            f.write(content)
         
         logger.info(f"✅ Imagen guardada: {filepath}")
         
@@ -759,7 +772,7 @@ class ImageGenerationService:
         prompt: str,
         state: Dict[str, Any],
         model: str = "Nano-banana"
-    ) -> str:
+    ) -> tuple[str, str]:
         """Genera imagen usando el servicio"""
         return await generate_image(prompt, state, self.identity_meta, model)
     
