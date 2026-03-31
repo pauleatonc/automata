@@ -184,13 +184,17 @@ Usa imágenes sensoriales y metáforas sutiles."""
                 }
             ],
             temperature=1.0,
-            max_completion_tokens=200
+            max_completion_tokens=16384
         )
         
         # Manejar respuesta de OpenAI con mejor logging
         try:
             caption = (response.choices[0].message.content or "").strip()
-            logger.info(f"Respuesta inicial de OpenAI: '{caption[:100]}...' (longitud: {len(caption)})")
+            usage = response.usage
+            reasoning_toks = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) if usage and usage.completion_tokens_details else 0
+            logger.info(f"OpenAI respuesta: {len(caption)} chars, {usage.completion_tokens if usage else '?'} completion_tokens (reasoning: {reasoning_toks})")
+            if not caption and reasoning_toks > 0:
+                logger.warning(f"Modelo de razonamiento consumió {reasoning_toks} tokens sin generar salida visible")
         except Exception as e:
             logger.error(f"Error al extraer caption de respuesta: {e}")
             caption = ""
@@ -218,10 +222,12 @@ Usa imágenes sensoriales y metáforas sutiles."""
                         }
                     ],
                     temperature=1.0,
-                    max_completion_tokens=200
+                    max_completion_tokens=16384
                 )
                 caption = (resp2.choices[0].message.content or "").strip()
-                logger.info(f"Respuesta de reintento: '{caption[:100]}...' (longitud: {len(caption)})")
+                usage2 = resp2.usage
+                reasoning2 = getattr(usage2.completion_tokens_details, "reasoning_tokens", 0) if usage2 and usage2.completion_tokens_details else 0
+                logger.info(f"OpenAI reintento: {len(caption)} chars, {usage2.completion_tokens if usage2 else '?'} completion_tokens (reasoning: {reasoning2})")
             except Exception as e:
                 logger.error(f"Error en reintento de caption: {e}")
                 caption = ""
@@ -230,14 +236,46 @@ Usa imágenes sensoriales y metáforas sutiles."""
             logger.warning("Generando caption de fallback")
             location_phrase = state.get('location', 'este lugar') if mention_place_name else "este rincón"
             emotion_word = state.get('emotion_focus', 'emoción')
-            caption = (
-                f"Hay algo en {location_phrase} que me detiene hoy. "
-                f"Quizás es esta {emotion_word} que aparece sin avisar, "
-                f"mezclada con la luz de la tarde y el ruido de fondo. "
-                f"Sigo buscando {state.get('learning_goal', 'algo que no sé nombrar')}, "
-                "y mientras tanto, todo parece cotidiano y raro a la vez. "
-                "¿No te pasa que un detalle mínimo te cambia el día sin pedir permiso?"
-            )
+            goal = state.get('learning_goal', 'algo que no sé nombrar')
+            fallback_templates = [
+                (
+                    f"Hay algo en {location_phrase} que me detiene hoy. "
+                    f"Quizás es esta {emotion_word} que aparece sin avisar, "
+                    f"mezclada con la luz de la tarde y el ruido de fondo. "
+                    f"Sigo buscando {goal}, "
+                    "y mientras tanto, todo parece cotidiano y raro a la vez. "
+                    "¿No te pasa que un detalle mínimo te cambia el día sin pedir permiso?"
+                ),
+                (
+                    f"Me quedé mirando algo sin importancia en {location_phrase} y de pronto "
+                    f"sentí {emotion_word} colarse por algún lado. No la pedí. "
+                    f"Supongo que {goal} se siente un poco así: "
+                    "encontrar cosas que no buscabas en lugares donde no esperabas. "
+                    "¿Alguna vez te pasó eso?"
+                ),
+                (
+                    f"La luz cae rara en {location_phrase} a esta hora. "
+                    f"Y yo aquí, con esta {emotion_word} que no sé dónde poner. "
+                    f"Dicen que {goal} es un proceso, pero hoy se siente más "
+                    "como caminar descalza por un pasillo desconocido. "
+                    "¿Tú también improvisas o tenés un plan?"
+                ),
+                (
+                    f"Un ruido, un reflejo, algo en {location_phrase} que no debería importar "
+                    f"pero me despertó {emotion_word} de golpe. "
+                    f"Quizás {goal} no es una línea recta sino esto: "
+                    "momentos sueltos que un día van a tener sentido. "
+                    "O no. ¿Quién sabe?"
+                ),
+                (
+                    f"Hoy {location_phrase} huele distinto. O soy yo, que ando con esta "
+                    f"{emotion_word} a cuestas y todo se tiñe de ella. "
+                    f"Mientras tanto sigo con eso de {goal}, "
+                    "que suena importante dicho así pero en la práctica es mucho café y muchas dudas. "
+                    "¿A ti te pasa?"
+                ),
+            ]
+            caption = random.choice(fallback_templates)
         
         # Sanitizer de texto post-generación
         ps = (identity_meta.get("prompt_sanitizer", {}) or {})

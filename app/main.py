@@ -11,6 +11,7 @@ from app.core.logging_config import setup_logging, get_logger
 from app.core.scheduler import scheduler
 from app.db.session import init_db
 from app.jobs.daily_job import generate_daily_post
+from app.services.instagram_token_manager import InstagramTokenManager
 
 # Configurar logging
 setup_logging("INFO")
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
     if enable_scheduler:
         logger.info("⏰ Iniciando scheduler...")
         try:
+            # Best-effort token refresh at startup (so the first scheduled run can publish)
+            try:
+                InstagramTokenManager().refresh_if_needed()
+            except Exception as e:
+                logger.warning("Token refresh en startup falló: %s", e)
+
             scheduler.set_job_function(generate_daily_post)
             scheduler.start()
             logger.info(f"✅ Scheduler iniciado: {settings.DAILY_CRON} ({settings.TIMEZONE})")

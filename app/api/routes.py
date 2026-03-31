@@ -205,8 +205,10 @@ async def generate_now(
                 platforms = {"instagram": media_id}
                 logger.info(f"📱 Publicado en Instagram: {media_id}")
 
-                story_id = instagram_publisher.publish_story(
-                    image_path, source_image_url=source_image_url
+                story_id = instagram_publisher.share_feed_post_to_story(
+                    feed_media_id=media_id,
+                    image_path=image_path,
+                    source_image_url=source_image_url,
                 )
                 if story_id:
                     platforms["instagram_story"] = story_id
